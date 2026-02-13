@@ -1,5 +1,5 @@
 # GaBaus Sky-logo Builder (For minecraft 1.21.1)
-#### Make an issue or DM me on discord `bautti_` with any questions (Check the FAQ first)
+#### Make an issue or DM me on discord `bautti_.` with any questions (Check the FAQ first)
 #### Pull Requests are welcome.
 
 **Currently works on 8b8t, and will soon be updated to 6b6t.**
