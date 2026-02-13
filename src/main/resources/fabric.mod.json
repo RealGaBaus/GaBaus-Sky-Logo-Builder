@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "addon-template",
+  "version": "${version}",
+  "name": "GaBaus Sky-logo Builder",
+  "description": "GaBaus Sky-logo Builder addon for Meteor Client.",
+  "authors": [
+    "GaBaus"
+  ],
+  "contact": {
+    "sources": "https://github.com/RealGaBaus/GaBaus-Sky-Logo-Builder"
+  },
+  "icon": "assets/template/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "meteor": [
+      "com.example.addon.GaBausSkyLogoBuilder"
+    ]
+  },
+  "mixins": [
+    "skylogo.mixins.json"
+  ],
+  "custom": {
+    "meteor-client:color": "255,255,0",
+    "modmenu": {
+      "parent": {
+        "id": "meteor-client"
+      }
+    }
+  },
+  "depends": {
+    "java": ">=21",
+    "minecraft": ["${mc_version}"],
+    "meteor-client": "*"
+  }
+}
