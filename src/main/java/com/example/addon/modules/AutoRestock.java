@@ -32,33 +32,77 @@ public class AutoRestock extends Module {
     private final SettingGroup sgCoords = settings.createGroup("Coordinates");
     private final SettingGroup sgPearl = settings.createGroup("Pearl Precision");
 
-    private final Setting<String> helperName = sgGeneral.add(new StringSetting.Builder().name("helper-name").defaultValue("HelperName").build());
-    private final Setting<String> homeBaseName = sgGeneral.add(new StringSetting.Builder().name("home-base-name").defaultValue("last-location").build());
-    private final Setting<Integer> shulkersToTake = sgGeneral.add(new IntSetting.Builder().name("shulkers-to-take").defaultValue(3).min(1).sliderMax(10).build());
+    public enum Mode {
+        BaseGuardian,
+        Kitbot
+    }
+
+    private final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
+        .name("mode")
+        .description("The restock mode to use.")
+        .defaultValue(Mode.BaseGuardian)
+        .build()
+    );
+
+    private final Setting<String> helperName = sgGeneral.add(new StringSetting.Builder().name("helper-name").defaultValue("HelperName").visible(() -> mode.get() == Mode.BaseGuardian).build());
+    private final Setting<String> homeBaseName = sgGeneral.add(new StringSetting.Builder().name("home-base-name").defaultValue("last-location").visible(() -> mode.get() == Mode.BaseGuardian).build());
+    private final Setting<String> kitCommand = sgGeneral.add(new StringSetting.Builder().name("kit-command").defaultValue("$kit (kitname) (amount)").visible(() -> mode.get() == Mode.Kitbot).build());
+    private final Setting<Integer> restockDelay = sgGeneral.add(new IntSetting.Builder().name("restock-delay-min").description("Delay in minutes before sending the kit command.").defaultValue(1).min(0).sliderMax(60).visible(() -> mode.get() == Mode.Kitbot).build());
+    private final Setting<Integer> kitSafeRadius = sgGeneral.add(new IntSetting.Builder().name("kit-safe-radius").description("Radius in chunks to search for a solid floor.").defaultValue(5).min(0).sliderMax(20).visible(() -> mode.get() == Mode.Kitbot).build());
+    private final Setting<Boolean> repeatUntilFound = sgGeneral.add(new BoolSetting.Builder().name("repeat-until-found").description("Keep sending the command until a new shulker is detected.").defaultValue(true).visible(() -> mode.get() == Mode.Kitbot).build());
+
+    private final Setting<Integer> obsidianToTake = sgGeneral.add(new IntSetting.Builder().name("obsidian-shulkers").description("How many obsidian shulkers to take.").defaultValue(3).min(0).sliderMax(10).visible(() -> mode.get() == Mode.BaseGuardian).build());
+    private final Setting<Integer> cryingToTake = sgGeneral.add(new IntSetting.Builder().name("crying-shulkers").description("How many crying obsidian shulkers to take.").defaultValue(3).min(0).sliderMax(10).visible(() -> mode.get() == Mode.BaseGuardian).build());
     private final Setting<Boolean> useBaritone = sgGeneral.add(new BoolSetting.Builder().name("use-baritone").defaultValue(true).build());
     
-    private final Setting<BlockPos> obsidianChestPos = sgCoords.add(new BlockPosSetting.Builder().name("obsidian-chest").defaultValue(BlockPos.ORIGIN).build());
-    private final Setting<BlockPos> cryingChestPos = sgCoords.add(new BlockPosSetting.Builder().name("crying-obsidian-chest").defaultValue(BlockPos.ORIGIN).build());
+    private final Setting<BlockPos> obsidianChestPos = sgCoords.add(new BlockPosSetting.Builder().name("obsidian-chest").defaultValue(BlockPos.ORIGIN).visible(() -> mode.get() == Mode.BaseGuardian).build());
+    private final Setting<BlockPos> cryingChestPos = sgCoords.add(new BlockPosSetting.Builder().name("crying-obsidian-chest").defaultValue(BlockPos.ORIGIN).visible(() -> mode.get() == Mode.BaseGuardian).build());
 
-    private final Setting<Integer> pearlDelay = sgPearl.add(new IntSetting.Builder().name("pearl-delay").description("Delay in ticks after detecting the pearl before throwing it.").defaultValue(40).min(0).sliderMax(100).build());
+    private final Setting<Integer> pearlDelay = sgPearl.add(new IntSetting.Builder().name("pearl-delay").description("Delay in ticks after detecting the pearl before throwing it.").defaultValue(40).min(0).sliderMax(100).visible(() -> mode.get() == Mode.BaseGuardian).build());
 
     private enum State {
         IDLE, HOMES_DEL, HOMES_SET, ALERT, WAIT_TP, 
         LOOK_DOWN, THROW,
-        GOTO_OBS, OPEN_OBS, LOOT_OBS, GOTO_CRY, OPEN_CRY, LOOT_CRY, RETURN
+        GOTO_OBS, OPEN_OBS, LOOT_OBS, GOTO_CRY, OPEN_CRY, LOOT_CRY, RETURN,
+        KIT_MOVE_TO_SAFE, KIT_WAIT, KIT_SEND, KIT_CHECK
     }
 
     private State state = State.IDLE;
     private int timer = 0;
     private int pearlCount = 0;
+    private int initialShulkerCount = 0;
     private BlockPos lastBaritoneGoal;
+    private Method getSchematicWorldMethod, getBlockStateMethod;
 
     public AutoRestock() {
         super(GaBausSkyLogoBuilder.CATEGORY, "auto-restock", "stasis restocker.");
     }
 
     @Override
-    public void onActivate() { state = State.HOMES_DEL; timer = 0; }
+    public void onActivate() { 
+        if (mode.get() == Mode.BaseGuardian) {
+            state = State.HOMES_DEL; 
+            timer = 0; 
+        } else {
+            initLitematica();
+            state = State.KIT_MOVE_TO_SAFE;
+            timer = 0;
+            initialShulkerCount = countShulkers();
+        }
+    }
+
+    private void initLitematica() {
+        try {
+            Class<?> swh = Class.forName("fi.dy.masa.litematica.world.SchematicWorldHandler");
+            for (Method m : swh.getDeclaredMethods()) {
+                if (m.getReturnType().getName().contains("WorldSchematic") && m.getParameterCount() == 0) {
+                    getSchematicWorldMethod = m;
+                    getSchematicWorldMethod.setAccessible(true);
+                    break;
+                }
+            }
+        } catch (Exception ignored) {}
+    }
 
     @Override
     public void onDeactivate() { stop(); }
@@ -67,13 +111,17 @@ public class AutoRestock extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
 
-        // Auto-close Pause Menu if it opens (happens often when alt-tabbing)
         if (mc.currentScreen instanceof GameMenuScreen) {
             mc.setScreen(null);
         }
 
         if (timer > 0) { timer--; return; }
 
+        if (mode.get() == Mode.BaseGuardian) tickBaseGuardian();
+        else tickKitbot();
+    }
+
+    private void tickBaseGuardian() {
         switch (state) {
             case HOMES_DEL -> { mc.player.networkHandler.sendChatCommand("delhome " + homeBaseName.get()); state = State.HOMES_SET; timer = 15; }
             case HOMES_SET -> { mc.player.networkHandler.sendChatCommand("sethome " + homeBaseName.get()); state = State.ALERT; timer = 15; }
@@ -98,7 +146,6 @@ public class AutoRestock extends Module {
                 }
             }
             case LOOK_DOWN -> {
-                // Center the player and look down
                 double centerX = Math.floor(mc.player.getX()) + 0.5;
                 double centerZ = Math.floor(mc.player.getZ()) + 0.5;
                 
@@ -185,7 +232,7 @@ public class AutoRestock extends Module {
             }
             case LOOT_OBS -> {
                 if (mc.currentScreen instanceof GenericContainerScreen) {
-                    lootShulkers(Items.OBSIDIAN);
+                    lootShulkers(Items.OBSIDIAN, obsidianToTake.get());
                     mc.player.closeHandledScreen();
                     state = State.GOTO_CRY;
                     timer = 20;
@@ -203,7 +250,7 @@ public class AutoRestock extends Module {
             }
             case LOOT_CRY -> {
                 if (mc.currentScreen instanceof GenericContainerScreen) {
-                    lootShulkers(Items.CRYING_OBSIDIAN);
+                    lootShulkers(Items.CRYING_OBSIDIAN, cryingToTake.get());
                     mc.player.closeHandledScreen();
                     state = State.RETURN;
                     timer = 20;
@@ -216,11 +263,105 @@ public class AutoRestock extends Module {
                 mc.player.networkHandler.sendChatCommand("home " + homeBaseName.get());
                 toggle();
             }
+            default -> {}
         }
     }
 
+    private void tickKitbot() {
+        switch (state) {
+            case KIT_MOVE_TO_SAFE -> {
+                BlockPos safeCenter = findSafeChunkCenter();
+                if (safeCenter != null) {
+                    if (walkTo(Vec3d.ofCenter(safeCenter))) {
+                        info("Kitbot: Arrived at safe chunk center.");
+                        state = State.KIT_WAIT;
+                        timer = restockDelay.get() * 60 * 20;
+                        info("Kitbot: Waiting " + restockDelay.get() + " minutes before sending command...");
+                    }
+                } else {
+                    warning("Kitbot: No safe completed chunk found nearby. Waiting here.");
+                    state = State.KIT_WAIT;
+                    timer = restockDelay.get() * 60 * 20;
+                }
+            }
+            case KIT_WAIT -> {
+                state = State.KIT_SEND;
+                timer = 0;
+            }
+            case KIT_SEND -> {
+                mc.player.networkHandler.sendChatCommand(kitCommand.get().startsWith("/") ? kitCommand.get().substring(1) : kitCommand.get());
+                info("Kitbot: Command sent. Checking for new shulkers...");
+                state = State.KIT_CHECK;
+                timer = 100;
+            }
+            case KIT_CHECK -> {
+                int currentShulkers = countShulkers();
+                if (currentShulkers > initialShulkerCount) {
+                    info("Kitbot: New shulker detected! Restock complete.");
+                    toggle();
+                } else if (repeatUntilFound.get()) {
+                    if (mc.player.age % 600 == 0) {
+                        state = State.KIT_SEND;
+                    }
+                } else {
+                    if (timer <= 0) toggle(); 
+                }
+            }
+            default -> {}
+        }
+    }
+
+    private BlockPos findSafeChunkCenter() {
+        int pCX = mc.player.getBlockPos().getX() >> 4;
+        int pCZ = mc.player.getBlockPos().getZ() >> 4;
+        int pY = mc.player.getBlockPos().getY();
+        int r = kitSafeRadius.get();
+
+        for (int dist = 0; dist <= r; dist++) {
+            for (int rx = -dist; rx <= dist; rx++) {
+                for (int rz = -dist; rz <= dist; rz++) {
+                    if (Math.max(Math.abs(rx), Math.abs(rz)) == dist) {
+                        int cx = pCX + rx;
+                        int cz = pCZ + rz;
+                        
+                        if (isChunkSolidAtY(cx, cz, pY - 1)) {
+                            return new BlockPos((cx << 4) + 8, pY, (cz << 4) + 8);
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private boolean isChunkSolidAtY(int cx, int cz, int y) {
+        int minX = cx << 4;
+        int minZ = cz << 4;
+
+        for (int x = minX; x < minX + 16; x++) {
+            for (int z = minZ; z < minZ + 16; z++) {
+                if (mc.world.getBlockState(new BlockPos(x, y, z)).isAir()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private int countShulkers() {
+        int count = 0;
+        for (int i = 0; i < mc.player.getInventory().size(); i++) {
+            ItemStack stack = mc.player.getInventory().getStack(i);
+            if (Block.getBlockFromItem(stack.getItem()) instanceof net.minecraft.block.ShulkerBoxBlock) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     private boolean walkTo(Vec3d target) {
-        BlockPos goalPos = BlockPos.ofFloored(target).up();
+        BlockPos goalPos = BlockPos.ofFloored(target);
         double dist = Math.sqrt(mc.player.squaredDistanceTo(Vec3d.ofCenter(goalPos)));
         
         if (useBaritone.get()) {
@@ -281,7 +422,7 @@ public class AutoRestock extends Module {
 
     private void lookAndOpen(BlockPos pos, Runnable callback) {
         stop();
-        Vec3d interactionPoint = Vec3d.ofCenter(pos).add(0, 0.45, 0); // Aim at the top face
+        Vec3d interactionPoint = Vec3d.ofCenter(pos).add(0, 0.45, 0);
         Rotations.rotate(Rotations.getYaw(interactionPoint), Rotations.getPitch(interactionPoint), 5, () -> {
             if (mc.interactionManager != null && mc.player != null) {
                 BlockHitResult hit = new BlockHitResult(interactionPoint, Direction.UP, pos, false);
@@ -292,7 +433,7 @@ public class AutoRestock extends Module {
         });
     }
 
-    private void lootShulkers(Item material) {
+    private void lootShulkers(Item material, int targetCount) {
         GenericContainerScreen screen = (GenericContainerScreen) mc.currentScreen;
         int size = screen.getScreenHandler().getInventory().size() - 36;
         
@@ -302,7 +443,7 @@ public class AutoRestock extends Module {
             if (isShulkerWith(stack, material)) currentCount++;
         }
 
-        int toTake = shulkersToTake.get() - currentCount;
+        int toTake = targetCount - currentCount;
         if (toTake <= 0) return;
 
         int taken = 0;

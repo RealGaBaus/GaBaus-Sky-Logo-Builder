@@ -68,7 +68,6 @@ public class BaseGuardian extends Module {
         if (mc.world == null || mc.player == null) return;
         String fullMsg = event.getMessage().getString();
 
-        // If the message does not contain the trigger command, ignore it
         if (!fullMsg.contains(triggerCommand.get())) return;
 
         for (String entry : userButtons.get()) {
@@ -94,12 +93,10 @@ public class BaseGuardian extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
 
-        // Update button cooldowns
         buttonCooldowns.forEach((pos, time) -> {
             if (time > 0) buttonCooldowns.put(pos, time - 1);
         });
 
-        // Interrupt Anti-AFK if there is something in the queue
         if (!buttonsQueue.isEmpty() && (state == State.IDLE || state == State.AFK_A || state == State.AFK_B)) {
             info("Interrupting Anti-AFK to process button queue.");
             stop();
@@ -140,12 +137,12 @@ public class BaseGuardian extends Module {
                 }
             }
             case INTERACTING -> {
-                state = State.BUSY; // Prevent the next tick from entering here again
+                state = State.BUSY;
                 lookAndOpen(currentTarget, () -> {
                     info("Button activated. Waiting 1 second before continuing...");
                     currentTarget = null;
-                    timer = 20; // 1 second wait
-                    state = State.IDLE; // It will return to AFK or to the next button after the timer
+                    timer = 20;
+                    state = State.IDLE;
                 });
             }
             case AFK_A -> {

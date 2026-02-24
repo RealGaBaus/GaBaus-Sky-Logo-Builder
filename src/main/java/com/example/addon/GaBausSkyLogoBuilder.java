@@ -2,6 +2,7 @@ package com.example.addon;
 
 import com.example.addon.modules.AutoRestock;
 import com.example.addon.modules.BaseGuardian;
+import com.example.addon.modules.LogoBreaker;
 import com.example.addon.modules.LogoBuilder;
 import com.mojang.logging.LogUtils;
 import meteordevelopment.meteorclient.addons.GithubRepo;
@@ -20,6 +21,7 @@ public class GaBausSkyLogoBuilder extends MeteorAddon {
 
         // Modules
         Modules.get().add(new LogoBuilder());
+        Modules.get().add(new LogoBreaker());
         Modules.get().add(new AutoRestock());
         Modules.get().add(new BaseGuardian());
     }

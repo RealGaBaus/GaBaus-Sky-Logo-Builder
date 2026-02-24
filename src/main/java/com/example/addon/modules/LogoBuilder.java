@@ -115,23 +115,19 @@ public class LogoBuilder extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
         
-        // Auto-close Pause Menu if it opens (happens often when alt-tabbing)
         if (mc.currentScreen instanceof GameMenuScreen) {
             mc.setScreen(null);
         }
 
-        // Auto-Disconnect on damage (ONLY while building, not during restock or logistics)
         if (autoDisconnect.get() && state == State.BUILDING && mc.player.hurtTime > 0) {
             isAutoDisconnecting = true;
             mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Damage detected during construction. Disconnecting..."));
             return;
         }
 
-        // Delay decrements every tick
         if (waitTicks > 0) { waitTicks--; return; }
         if (delayTimer > 0) delayTimer--;
 
-        // Hunger check
         if (state != State.EATING && mc.player.getHungerManager().getFoodLevel() <= eatThreshold.get()) {
             FindItemResult food = InvUtils.find(this::isFoodValid);
             if (food.found()) {
@@ -143,11 +139,10 @@ public class LogoBuilder extends Module {
             }
         }
 
-        // Stuck detection
         if (lastBaritoneGoal != null && mc.player.getVelocity().horizontalLengthSquared() < 0.0001) {
             baritoneStuckTimer++;
             if (baritoneStuckTimer > 40) { 
-                lastBaritoneGoal = null; // Force recalculate
+                lastBaritoneGoal = null; 
                 baritoneStuckTimer = 0; 
             }
         } else {
@@ -185,7 +180,7 @@ public class LogoBuilder extends Module {
             if (oldSlotBeforeEating != -1) InvUtils.swap(oldSlotBeforeEating, false);
             state = preEatingState;
             foodLevelAtStart = -1;
-            waitTicks = 5; // Small delay to let the game sync
+            waitTicks = 5; 
             return;
         }
 
@@ -199,7 +194,6 @@ public class LogoBuilder extends Module {
         int slot = ensureInHotbar(food);
         InvUtils.swap(slot, false);
         
-        // Force interaction to support eating with chat open or when unfocused
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
         mc.options.useKey.setPressed(true);
     }
@@ -260,8 +254,6 @@ public class LogoBuilder extends Module {
                         }
                     }
 
-                    // Only switch if we are sure the current one is empty
-                    // We check if we are close enough to the chunk to see its blocks
                     if (activeChunkX != Integer.MAX_VALUE && !currentChunkInScan) {
                         double distToChunk = Math.sqrt(Math.pow((activeChunkX * 16 + 8) - mc.player.getX(), 2) + Math.pow((activeChunkZ * 16 + 8) - mc.player.getZ(), 2));
                         if (distToChunk < scanRange.get() - 12) {
@@ -279,7 +271,6 @@ public class LogoBuilder extends Module {
                         info("Switching to chunk: " + activeChunkX + ", " + activeChunkZ);
                     }
 
-                    // Filter only blocks in active chunk
                     toPlace.removeIf(p -> (p.getX() >> 4) != activeChunkX || (p.getZ() >> 4) != activeChunkZ);
                 }
 
@@ -295,7 +286,6 @@ public class LogoBuilder extends Module {
                 } else targetPos = null;
             } else targetPos = null;
         } catch (Exception e) {
-            // error("Scan error: " + e.getMessage());
         }
     }
 
@@ -332,7 +322,6 @@ public class LogoBuilder extends Module {
                 moveTowards(targetPos, (int) Math.floor(range.get() - 1.2));
             }
         } catch (Exception e) {
-            // error("Logic error: " + e.getMessage());
         }
     }
 
@@ -358,7 +347,6 @@ public class LogoBuilder extends Module {
                         }
                     }
 
-                    // Check if any of the needed material remains in the shulker
                     boolean remaining = false;
                     for (int i = 0; i < 27; i++) {
                         if (mc.player.currentScreenHandler.getSlot(i).getStack().getItem() == neededMaterial) {
