@@ -16,11 +16,11 @@
     - **Base Guardian Mode**: Standard stasis restocker. Handles pearl throwing, TP detection, and looting designated chests (Obsidian/Crying Obsidian).
     - **Kitbot Mode**: Modern restock via commands. 
       - **Safe Chunk Search**: Automatically finds a nearby 16x16 solid chunk to stand on before requesting the kit.
-      - **Custom Commands**: Configurable command (e.g., `$kit logo 1`).
+      - **Custom Commands**: Configurable command (e.g., `$kit obsidian 1`).
       - **Smart Timing**: Customizable delay (in minutes) and option to repeat the message until a new shulker is detected in the inventory.
 
 - **Logo Breaker Beta**
-  - Efficiently breaks blocks in construction areas.
+  - Efficiently breaks logos.
   - Supports chunk-based operation and feet protection to avoid falling.
   - Filterable by block type (Obsidian/Crying Obsidian).
 
