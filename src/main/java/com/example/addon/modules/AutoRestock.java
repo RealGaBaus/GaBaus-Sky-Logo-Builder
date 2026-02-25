@@ -1,19 +1,24 @@
 package com.example.addon.modules;
 
 import com.example.addon.GaBausSkyLogoBuilder;
+import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.ShulkerBoxBlock;
 import net.minecraft.client.gui.screen.GameMenuScreen;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.ContainerComponent;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -46,7 +51,11 @@ public class AutoRestock extends Module {
 
     private final Setting<String> helperName = sgGeneral.add(new StringSetting.Builder().name("helper-name").defaultValue("HelperName").visible(() -> mode.get() == Mode.BaseGuardian).build());
     private final Setting<String> homeBaseName = sgGeneral.add(new StringSetting.Builder().name("home-base-name").defaultValue("last-location").visible(() -> mode.get() == Mode.BaseGuardian).build());
+    private final Setting<String> kitbotName = sgGeneral.add(new StringSetting.Builder().name("kitbot-name").defaultValue("Kitbot").visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<String> kitCommand = sgGeneral.add(new StringSetting.Builder().name("kit-command").defaultValue("$kit (kitname) (amount)").visible(() -> mode.get() == Mode.Kitbot).build());
+    private final Setting<Boolean> autoAcceptTpa = sgGeneral.add(new BoolSetting.Builder().name("auto-accept-tpa").description("Automatically accept TPA requests from the kitbot.").defaultValue(true).visible(() -> mode.get() == Mode.Kitbot).build());
+    private final Setting<String> tpaMessageTrigger = sgGeneral.add(new StringSetting.Builder().name("tpa-message-trigger").description("The text to look for in chat to detect a TPA request.").defaultValue("wants to teleport to you").visible(() -> mode.get() == Mode.Kitbot).build());
+    private final Setting<String> tpAcceptCommand = sgGeneral.add(new StringSetting.Builder().name("tp-accept-command").description("The command used to accept a TPA request.").defaultValue("/tpy KitBot").visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<Integer> restockDelay = sgGeneral.add(new IntSetting.Builder().name("restock-delay-min").description("Delay in minutes before sending the kit command.").defaultValue(1).min(0).sliderMax(60).visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<Integer> kitSafeRadius = sgGeneral.add(new IntSetting.Builder().name("kit-safe-radius").description("Radius in chunks to search for a solid floor.").defaultValue(5).min(0).sliderMax(20).visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<Boolean> repeatUntilFound = sgGeneral.add(new BoolSetting.Builder().name("repeat-until-found").description("Keep sending the command until a new shulker is detected.").defaultValue(true).visible(() -> mode.get() == Mode.Kitbot).build());
@@ -64,13 +73,16 @@ public class AutoRestock extends Module {
         IDLE, HOMES_DEL, HOMES_SET, ALERT, WAIT_TP, 
         LOOK_DOWN, THROW,
         GOTO_OBS, OPEN_OBS, LOOT_OBS, GOTO_CRY, OPEN_CRY, LOOT_CRY, RETURN,
-        KIT_MOVE_TO_SAFE, KIT_WAIT, KIT_SEND, KIT_CHECK
+        KIT_MOVE_TO_SAFE, KIT_WAIT, KIT_SEND, KIT_CHECK, KIT_PICKUP
     }
 
     private State state = State.IDLE;
     private int timer = 0;
     private int pearlCount = 0;
     private int initialShulkerCount = 0;
+    private int tpaCooldown = 0;
+    private boolean shulkerPickedUp = false;
+    private ItemEntity targetItem;
     private BlockPos lastBaritoneGoal;
     private Method getSchematicWorldMethod, getBlockStateMethod;
 
@@ -80,6 +92,8 @@ public class AutoRestock extends Module {
 
     @Override
     public void onActivate() { 
+        tpaCooldown = 0;
+        shulkerPickedUp = false;
         if (mode.get() == Mode.BaseGuardian) {
             state = State.HOMES_DEL; 
             timer = 0; 
@@ -108,6 +122,33 @@ public class AutoRestock extends Module {
     public void onDeactivate() { stop(); }
 
     @EventHandler
+    private void onMessage(ReceiveMessageEvent event) {
+        if (mc.world == null || mc.player == null || mode.get() != Mode.Kitbot || !isActive() || !autoAcceptTpa.get()) return;
+        if (tpaCooldown > 0) return;
+
+        String msg = event.getMessage().getString();
+        String name = kitbotName.get().toLowerCase();
+        String trigger = tpaMessageTrigger.get().toLowerCase();
+
+        if (msg.toLowerCase().contains(name) && msg.toLowerCase().contains(trigger)) {
+            info("Accepting TPA from " + kitbotName.get());
+            String cmd = tpAcceptCommand.get();
+            if (!cmd.startsWith("/")) cmd = "/" + cmd;
+            sendMessage(cmd);
+            tpaCooldown = 100;
+        }
+    }
+
+    private void sendMessage(String msg) {
+        if (msg == null || msg.isEmpty()) return;
+        if (msg.startsWith("/")) {
+            mc.player.networkHandler.sendChatCommand(msg.substring(1));
+        } else {
+            mc.player.networkHandler.sendChatMessage(msg);
+        }
+    }
+
+    @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
 
@@ -115,6 +156,7 @@ public class AutoRestock extends Module {
             mc.setScreen(null);
         }
 
+        if (tpaCooldown > 0) tpaCooldown--;
         if (timer > 0) { timer--; return; }
 
         if (mode.get() == Mode.BaseGuardian) tickBaseGuardian();
@@ -123,10 +165,10 @@ public class AutoRestock extends Module {
 
     private void tickBaseGuardian() {
         switch (state) {
-            case HOMES_DEL -> { mc.player.networkHandler.sendChatCommand("delhome " + homeBaseName.get()); state = State.HOMES_SET; timer = 15; }
-            case HOMES_SET -> { mc.player.networkHandler.sendChatCommand("sethome " + homeBaseName.get()); state = State.ALERT; timer = 15; }
+            case HOMES_DEL -> { sendMessage("/delhome " + homeBaseName.get()); state = State.HOMES_SET; timer = 15; }
+            case HOMES_SET -> { sendMessage("/sethome " + homeBaseName.get()); state = State.ALERT; timer = 15; }
             case ALERT -> { 
-                mc.player.networkHandler.sendChatCommand("msg " + helperName.get() + " #restock"); 
+                sendMessage("/msg " + helperName.get() + " #restock"); 
                 state = State.WAIT_TP; 
                 timer = 0; 
                 info("Message sent. Waiting for TP and pearl...");
@@ -260,7 +302,7 @@ public class AutoRestock extends Module {
             }
             case RETURN -> {
                 stop();
-                mc.player.networkHandler.sendChatCommand("home " + homeBaseName.get());
+                sendMessage("/home " + homeBaseName.get());
                 toggle();
             }
             default -> {}
@@ -289,26 +331,74 @@ public class AutoRestock extends Module {
                 timer = 0;
             }
             case KIT_SEND -> {
-                mc.player.networkHandler.sendChatCommand(kitCommand.get().startsWith("/") ? kitCommand.get().substring(1) : kitCommand.get());
-                info("Kitbot: Command sent. Checking for new shulkers...");
+                String cmd = kitCommand.get();
+                if (cmd.contains("(kitbotname)")) {
+                    cmd = cmd.replace("(kitbotname)", kitbotName.get());
+                }
+                sendMessage(cmd);
+                info("Kitbot: Command sent to " + kitbotName.get() + ". Checking for new shulkers...");
                 state = State.KIT_CHECK;
                 timer = 100;
             }
             case KIT_CHECK -> {
+                targetItem = findDroppedShulker();
+                if (targetItem != null) {
+                    info("Kitbot: Found shulker on floor! Going to pick it up.");
+                    state = State.KIT_PICKUP;
+                    return;
+                }
+
                 int currentShulkers = countShulkers();
-                if (currentShulkers > initialShulkerCount) {
-                    info("Kitbot: New shulker detected! Restock complete.");
-                    toggle();
+                if (currentShulkers > initialShulkerCount || shulkerPickedUp) {
+                    if (findDroppedShulker() == null) {
+                        info("Kitbot: Restock complete.");
+                        finishRestock();
+                    }
                 } else if (repeatUntilFound.get()) {
                     if (mc.player.age % 600 == 0) {
                         state = State.KIT_SEND;
                     }
                 } else {
-                    if (timer <= 0) toggle(); 
+                    if (timer <= 0) finishRestock(); 
+                }
+            }
+            case KIT_PICKUP -> {
+                if (targetItem == null || !targetItem.isAlive()) {
+                    state = State.KIT_CHECK;
+                    return;
+                }
+                if (walkTo(targetItem.getPos())) {
+                    timer = 20;
+                    shulkerPickedUp = true;
+                    state = State.KIT_CHECK;
                 }
             }
             default -> {}
         }
+    }
+
+    private void finishRestock() {
+        Module logoBuilder = Modules.get().get(LogoBuilder.class);
+        if (logoBuilder != null && !logoBuilder.isActive()) {
+            logoBuilder.toggle();
+        }
+        if (isActive()) toggle();
+    }
+
+    private ItemEntity findDroppedShulker() {
+        int pCX = mc.player.getBlockPos().getX() >> 4;
+        int pCZ = mc.player.getBlockPos().getZ() >> 4;
+
+        for (Entity entity : mc.world.getEntities()) {
+            if (entity instanceof ItemEntity item && entity.isAlive()) {
+                if ((entity.getBlockX() >> 4) == pCX && (entity.getBlockZ() >> 4) == pCZ) {
+                    if (Block.getBlockFromItem(item.getStack().getItem()) instanceof ShulkerBoxBlock) {
+                        return item;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private BlockPos findSafeChunkCenter() {
@@ -353,7 +443,7 @@ public class AutoRestock extends Module {
         int count = 0;
         for (int i = 0; i < mc.player.getInventory().size(); i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
-            if (Block.getBlockFromItem(stack.getItem()) instanceof net.minecraft.block.ShulkerBoxBlock) {
+            if (Block.getBlockFromItem(stack.getItem()) instanceof ShulkerBoxBlock) {
                 count++;
             }
         }
@@ -457,7 +547,7 @@ public class AutoRestock extends Module {
     }
 
     private boolean isShulkerWith(ItemStack stack, Item material) {
-        if (!(Block.getBlockFromItem(stack.getItem()) instanceof net.minecraft.block.ShulkerBoxBlock)) return false;
+        if (!(Block.getBlockFromItem(stack.getItem()) instanceof ShulkerBoxBlock)) return false;
         ContainerComponent container = stack.get(DataComponentTypes.CONTAINER);
         if (container == null) return false;
         for (ItemStack inner : container.iterateNonEmpty()) {
