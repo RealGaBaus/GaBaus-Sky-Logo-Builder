@@ -62,10 +62,11 @@ public class LogoBuilder extends Module {
 
     private final List<BlockPos> toPlace = new ArrayList<>();
     private Method getSchematicWorldMethod, getBlockStateMethod;
+    private boolean reflectionSuccessNotified = false;
     private int timer = 0, delayTimer = 0, waitTicks = 0, baritoneStuckTimer = 0, oldSlotBeforeEating = -1, foodLevelAtStart = -1;
     private int activeChunkX = Integer.MAX_VALUE, activeChunkZ = Integer.MAX_VALUE;
     private BlockPos targetPos, obsidianStation, cryingStation, activeStation, lastBaritoneGoal;
-    private Item neededMaterial;
+    public Item neededMaterial;
     private boolean isAutoDisconnecting = false;
 
     public LogoBuilder() {
@@ -82,6 +83,11 @@ public class LogoBuilder extends Module {
         isAutoDisconnecting = false;
         activeChunkX = Integer.MAX_VALUE;
         activeChunkZ = Integer.MAX_VALUE;
+        obsidianStation = null;
+        cryingStation = null;
+        getSchematicWorldMethod = null;
+        getBlockStateMethod = null;
+        reflectionSuccessNotified = false;
         initReflection();
     }
 
@@ -93,21 +99,33 @@ public class LogoBuilder extends Module {
             obsidianStation = null;
             cryingStation = null;
         }
+        getSchematicWorldMethod = null;
+        getBlockStateMethod = null;
+        reflectionSuccessNotified = false;
     }
 
     private void initReflection() {
         try {
             Class<?> swh = Class.forName("fi.dy.masa.litematica.world.SchematicWorldHandler");
-            for (Method m : swh.getDeclaredMethods()) {
-                if (m.getReturnType().getName().contains("WorldSchematic") && m.getParameterCount() == 0) {
-                    getSchematicWorldMethod = m;
-                    getSchematicWorldMethod.setAccessible(true);
-                    info("Litematica connected.");
-                    break;
+            // Try to find by name first, then by return type
+            try {
+                getSchematicWorldMethod = swh.getDeclaredMethod("getSchematicWorld");
+            } catch (NoSuchMethodException e) {
+                for (Method m : swh.getDeclaredMethods()) {
+                    if (m.getReturnType().getName().contains("WorldSchematic") && m.getParameterCount() == 0) {
+                        getSchematicWorldMethod = m;
+                        break;
+                    }
                 }
             }
+
+            if (getSchematicWorldMethod != null) {
+                getSchematicWorldMethod.setAccessible(true);
+            } else {
+                error("Could not find Litematica world getter method.");
+            }
         } catch (Exception e) {
-            error("Reflection error: " + e.getMessage());
+            error("Litematica reflection error: " + e.getMessage());
         }
     }
 
@@ -207,9 +225,16 @@ public class LogoBuilder extends Module {
 
     private void doScan() {
         try {
-            if (getSchematicWorldMethod == null) { initReflection(); if (getSchematicWorldMethod == null) return; }
+            if (getSchematicWorldMethod == null) { 
+                initReflection(); 
+                if (getSchematicWorldMethod == null) return; 
+            }
+            
             Object worldSchematic = getSchematicWorldMethod.invoke(null);
-            if (worldSchematic == null) return;
+            if (worldSchematic == null) {
+                if (timer % 100 == 0) warning("Litematica is connected, but no schematic world is loaded.");
+                return;
+            }
 
             if (getBlockStateMethod == null) {
                 for (Method m : worldSchematic.getClass().getMethods()) {
@@ -220,7 +245,16 @@ public class LogoBuilder extends Module {
                     }
                 }
             }
-            if (getBlockStateMethod == null) return;
+            
+            if (getBlockStateMethod == null) {
+                if (timer % 100 == 0) error("Could not find getBlockState method in Litematica's WorldSchematic.");
+                return;
+            }
+
+            if (!reflectionSuccessNotified) {
+                info("Litematica connected.");
+                reflectionSuccessNotified = true;
+            }
 
             toPlace.clear();
             BlockPos pPos = mc.player.getBlockPos();
@@ -286,6 +320,7 @@ public class LogoBuilder extends Module {
                 } else targetPos = null;
             } else targetPos = null;
         } catch (Exception e) {
+            if (timer % 100 == 0) error("Scan error: " + e.toString());
         }
     }
 
@@ -293,7 +328,7 @@ public class LogoBuilder extends Module {
         try {
             if (getSchematicWorldMethod == null || getBlockStateMethod == null) return;
             Object worldSchematic = getSchematicWorldMethod.invoke(null);
-            if (worldSchematic == null) return;
+            if (worldSchematic == null) { targetPos = null; return; }
 
             BlockState required = (BlockState) getBlockStateMethod.invoke(worldSchematic, targetPos);
             if (required == null || required.isAir()) { targetPos = null; return; }
@@ -302,7 +337,7 @@ public class LogoBuilder extends Module {
             if (countItem(item) == 0) {
                 info("Out of " + item.getName().getString());
                 neededMaterial = item;
-                activeStation = (item == Items.OBSIDIAN) ? obsidianStation : cryingStation;
+                activeStation = (item == Items.OBSIDIAN) ? obsidianStation : (item == Items.CRYING_OBSIDIAN ? cryingStation : null);
                 stopBaritone();
                 state = (activeStation == null || !(mc.world.getBlockState(activeStation).getBlock() instanceof ShulkerBoxBlock)) 
                         ? State.PLACING_STATION : State.TRAVELING;
@@ -322,6 +357,7 @@ public class LogoBuilder extends Module {
                 moveTowards(targetPos, (int) Math.floor(range.get() - 1.2));
             }
         } catch (Exception e) {
+            if (timer % 100 == 0) error("Building logic error: " + e.toString());
         }
     }
 
@@ -360,7 +396,7 @@ public class LogoBuilder extends Module {
                     if (!remaining) {
                         info("Shulker at " + activeStation.toShortString() + " is now empty of " + neededMaterial.getName().getString() + ". Forgetting it.");
                         if (neededMaterial == Items.OBSIDIAN) obsidianStation = null;
-                        else cryingStation = null;
+                        else if (neededMaterial == Items.CRYING_OBSIDIAN) cryingStation = null;
                         activeStation = null;
                     }
                     
@@ -374,7 +410,8 @@ public class LogoBuilder extends Module {
                     if (shulker.found()) {
                         int slot = ensureInHotbar(shulker);
                         if (BlockUtils.place(pos, Hand.MAIN_HAND, slot, true, 0, true, true, false)) {
-                            if (neededMaterial == Items.OBSIDIAN) obsidianStation = pos; else cryingStation = pos;
+                            if (neededMaterial == Items.OBSIDIAN) obsidianStation = pos; 
+                            else if (neededMaterial == Items.CRYING_OBSIDIAN) cryingStation = pos;
                             activeStation = pos; state = State.OPENING; waitTicks = 10;
                         }
                     } else {
