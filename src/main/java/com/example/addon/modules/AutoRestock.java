@@ -51,8 +51,11 @@ public class AutoRestock extends Module {
 
     private final Setting<String> helperName = sgGeneral.add(new StringSetting.Builder().name("helper-name").defaultValue("HelperName").visible(() -> mode.get() == Mode.BaseGuardian).build());
     private final Setting<String> homeBaseName = sgGeneral.add(new StringSetting.Builder().name("home-base-name").defaultValue("last-location").visible(() -> mode.get() == Mode.BaseGuardian).build());
+    
     private final Setting<String> kitbotName = sgGeneral.add(new StringSetting.Builder().name("kitbot-name").defaultValue("Kitbot").visible(() -> mode.get() == Mode.Kitbot).build());
-    private final Setting<String> kitCommand = sgGeneral.add(new StringSetting.Builder().name("kit-command").defaultValue("$kit (kitname) (amount)").visible(() -> mode.get() == Mode.Kitbot).build());
+    private final Setting<String> obsidianKitCommand = sgGeneral.add(new StringSetting.Builder().name("obsidian-command").description("Command to send when obsidian is needed.").defaultValue("$kit obby 1").visible(() -> mode.get() == Mode.Kitbot).build());
+    private final Setting<String> cryingKitCommand = sgGeneral.add(new StringSetting.Builder().name("crying-command").description("Command to send when crying obsidian is needed.").defaultValue("$kit crying 1").visible(() -> mode.get() == Mode.Kitbot).build());
+    
     private final Setting<Boolean> autoAcceptTpa = sgGeneral.add(new BoolSetting.Builder().name("auto-accept-tpa").description("Automatically accept TPA requests from the kitbot.").defaultValue(true).visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<String> tpaMessageTrigger = sgGeneral.add(new StringSetting.Builder().name("tpa-message-trigger").description("The text to look for in chat to detect a TPA request.").defaultValue("wants to teleport to you").visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<String> tpAcceptCommand = sgGeneral.add(new StringSetting.Builder().name("tp-accept-command").description("The command used to accept a TPA request.").defaultValue("/tpy KitBot").visible(() -> mode.get() == Mode.Kitbot).build());
@@ -82,6 +85,7 @@ public class AutoRestock extends Module {
     private int initialShulkerCount = 0;
     private int tpaCooldown = 0;
     private boolean shulkerPickedUp = false;
+    private boolean tpaAccepted = false;
     private ItemEntity targetItem;
     private BlockPos lastBaritoneGoal;
     private Method getSchematicWorldMethod, getBlockStateMethod;
@@ -94,6 +98,7 @@ public class AutoRestock extends Module {
     public void onActivate() { 
         tpaCooldown = 0;
         shulkerPickedUp = false;
+        tpaAccepted = false;
         if (mode.get() == Mode.BaseGuardian) {
             state = State.HOMES_DEL; 
             timer = 0; 
@@ -136,6 +141,7 @@ public class AutoRestock extends Module {
             if (!cmd.startsWith("/")) cmd = "/" + cmd;
             sendMessage(cmd);
             tpaCooldown = 100;
+            tpaAccepted = true;
         }
     }
 
@@ -331,12 +337,26 @@ public class AutoRestock extends Module {
                 timer = 0;
             }
             case KIT_SEND -> {
-                String cmd = kitCommand.get();
+                LogoBuilder logoBuilder = Modules.get().get(LogoBuilder.class);
+                String cmd = obsidianKitCommand.get(); // Default
+                
+                if (logoBuilder != null && logoBuilder.neededMaterial != null) {
+                    if (logoBuilder.neededMaterial == Items.CRYING_OBSIDIAN) {
+                        cmd = cryingKitCommand.get();
+                        info("Kitbot: Crying Obsidian needed. Using: " + cmd);
+                    } else {
+                        info("Kitbot: Obsidian needed. Using: " + cmd);
+                    }
+                } else {
+                    info("Kitbot: No specific material detected from LogoBuilder, using Obsidian command by default.");
+                }
+
                 if (cmd.contains("(kitbotname)")) {
                     cmd = cmd.replace("(kitbotname)", kitbotName.get());
                 }
+                
                 sendMessage(cmd);
-                info("Kitbot: Command sent to " + kitbotName.get() + ". Checking for new shulkers...");
+                tpaAccepted = false;
                 state = State.KIT_CHECK;
                 timer = 100;
             }
@@ -354,12 +374,12 @@ public class AutoRestock extends Module {
                         info("Kitbot: Restock complete.");
                         finishRestock();
                     }
-                } else if (repeatUntilFound.get()) {
+                } else if (repeatUntilFound.get() && !tpaAccepted) {
                     if (mc.player.age % 600 == 0) {
                         state = State.KIT_SEND;
                     }
                 } else {
-                    if (timer <= 0) finishRestock(); 
+                    if (!tpaAccepted && timer <= 0) finishRestock(); 
                 }
             }
             case KIT_PICKUP -> {
