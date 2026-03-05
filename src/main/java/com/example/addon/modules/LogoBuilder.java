@@ -132,7 +132,7 @@ public class LogoBuilder extends Module {
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
-        
+
         if (mc.currentScreen instanceof GameMenuScreen) {
             mc.setScreen(null);
         }
@@ -153,15 +153,15 @@ public class LogoBuilder extends Module {
                 state = State.EATING;
                 foodLevelAtStart = mc.player.getHungerManager().getFoodLevel();
                 stopBaritone();
-                oldSlotBeforeEating = mc.player.getInventory().selectedSlot;
+                oldSlotBeforeEating = mc.player.getInventory().getSelectedSlot();
             }
         }
 
         if (lastBaritoneGoal != null && mc.player.getVelocity().horizontalLengthSquared() < 0.0001) {
             baritoneStuckTimer++;
-            if (baritoneStuckTimer > 40) { 
-                lastBaritoneGoal = null; 
-                baritoneStuckTimer = 0; 
+            if (baritoneStuckTimer > 40) {
+                lastBaritoneGoal = null;
+                baritoneStuckTimer = 0;
             }
         } else {
             baritoneStuckTimer = 0;
@@ -192,13 +192,15 @@ public class LogoBuilder extends Module {
     }
 
     private void doEating() {
+        assert mc.player != null;
+        assert mc.interactionManager != null;
         if (mc.player.getHungerManager().getFoodLevel() > foodLevelAtStart || mc.player.getHungerManager().getFoodLevel() >= 20) {
             mc.options.useKey.setPressed(false);
             mc.interactionManager.stopUsingItem(mc.player);
             if (oldSlotBeforeEating != -1) InvUtils.swap(oldSlotBeforeEating, false);
             state = preEatingState;
             foodLevelAtStart = -1;
-            waitTicks = 5; 
+            waitTicks = 5;
             return;
         }
 
@@ -211,7 +213,7 @@ public class LogoBuilder extends Module {
 
         int slot = ensureInHotbar(food);
         InvUtils.swap(slot, false);
-        
+
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
         mc.options.useKey.setPressed(true);
     }
@@ -225,11 +227,11 @@ public class LogoBuilder extends Module {
 
     private void doScan() {
         try {
-            if (getSchematicWorldMethod == null) { 
-                initReflection(); 
-                if (getSchematicWorldMethod == null) return; 
+            if (getSchematicWorldMethod == null) {
+                initReflection();
+                if (getSchematicWorldMethod == null) return;
             }
-            
+
             Object worldSchematic = getSchematicWorldMethod.invoke(null);
             if (worldSchematic == null) {
                 if (timer % 100 == 0) warning("Litematica is connected, but no schematic world is loaded.");
@@ -245,7 +247,7 @@ public class LogoBuilder extends Module {
                     }
                 }
             }
-            
+
             if (getBlockStateMethod == null) {
                 if (timer % 100 == 0) error("Could not find getBlockState method in Litematica's WorldSchematic.");
                 return;
@@ -257,6 +259,8 @@ public class LogoBuilder extends Module {
             }
 
             toPlace.clear();
+            assert mc.player != null;
+            assert mc.world != null;
             BlockPos pPos = mc.player.getBlockPos();
             int r = scanRange.get();
             for (int x = -r; x <= r; x++) {
@@ -298,7 +302,7 @@ public class LogoBuilder extends Module {
 
                     if (activeChunkX == Integer.MAX_VALUE) {
                         BlockPos first = toPlace.stream()
-                            .min(Comparator.comparingDouble(p -> mc.player.getPos().distanceTo(Vec3d.ofCenter(p))))
+                            .min(Comparator.comparingDouble(p -> mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(p))))
                             .orElse(toPlace.get(0));
                         activeChunkX = first.getX() >> 4;
                         activeChunkZ = first.getZ() >> 4;
@@ -314,7 +318,7 @@ public class LogoBuilder extends Module {
                         boolean bBelow = b.getY() < mc.player.getY();
                         if (aBelow && !bBelow) return -1;
                         if (!aBelow && bBelow) return 1;
-                        return Double.compare(mc.player.getPos().distanceTo(Vec3d.ofCenter(a)), mc.player.getPos().distanceTo(Vec3d.ofCenter(b)));
+                        return Double.compare(mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(a)), mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(b)));
                     });
                     targetPos = toPlace.get(0);
                 } else targetPos = null;
@@ -326,25 +330,27 @@ public class LogoBuilder extends Module {
 
     private void tickBuildingLogic() {
         try {
+            assert mc.player != null;
+            assert mc.world != null;
             if (getSchematicWorldMethod == null || getBlockStateMethod == null) return;
             Object worldSchematic = getSchematicWorldMethod.invoke(null);
             if (worldSchematic == null) { targetPos = null; return; }
 
             BlockState required = (BlockState) getBlockStateMethod.invoke(worldSchematic, targetPos);
             if (required == null || required.isAir()) { targetPos = null; return; }
-            
+
             Item item = required.getBlock().asItem();
             if (countItem(item) == 0) {
                 info("Out of " + item.getName().getString());
                 neededMaterial = item;
                 activeStation = (item == Items.OBSIDIAN) ? obsidianStation : (item == Items.CRYING_OBSIDIAN ? cryingStation : null);
                 stopBaritone();
-                state = (activeStation == null || !(mc.world.getBlockState(activeStation).getBlock() instanceof ShulkerBoxBlock)) 
+                state = (activeStation == null || !(mc.world.getBlockState(activeStation).getBlock() instanceof ShulkerBoxBlock))
                         ? State.PLACING_STATION : State.TRAVELING;
                 return;
             }
 
-            double dist = mc.player.getPos().distanceTo(Vec3d.ofCenter(targetPos));
+            double dist = mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(targetPos));
             if (dist <= range.get()) {
                 stopBaritone();
                 mc.options.forwardKey.setPressed(false);
@@ -364,15 +370,20 @@ public class LogoBuilder extends Module {
     private void doLogistics() {
         switch (state) {
             case TRAVELING -> {
-                double dist = mc.player.getPos().distanceTo(Vec3d.ofCenter(activeStation));
+                assert mc.player != null;
+                assert mc.world != null;
+                double dist = mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(activeStation));
                 if (dist <= 4.0) { stopBaritone(); state = State.OPENING; }
                 else moveTowards(activeStation, 2);
             }
             case OPENING -> {
+                assert mc.interactionManager != null;
                 mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, new BlockHitResult(Vec3d.ofCenter(activeStation), Direction.UP, activeStation, false));
                 state = State.RELOADING; waitTicks = 15;
             }
             case RELOADING -> {
+                assert mc.player != null;
+                assert mc.interactionManager != null;
                 if (mc.currentScreen instanceof ShulkerBoxScreen) {
                     int taken = 0;
                     for (int i = 0; i < 27 && taken < maxStacks.get(); i++) {
@@ -392,14 +403,14 @@ public class LogoBuilder extends Module {
                     }
 
                     mc.player.closeHandledScreen();
-                    
+
                     if (!remaining) {
                         info("Shulker at " + activeStation.toShortString() + " is now empty of " + neededMaterial.getName().getString() + ". Forgetting it.");
                         if (neededMaterial == Items.OBSIDIAN) obsidianStation = null;
                         else if (neededMaterial == Items.CRYING_OBSIDIAN) cryingStation = null;
                         activeStation = null;
                     }
-                    
+
                     state = (countItem(neededMaterial) == 0) ? State.PLACING_STATION : State.BUILDING;
                 }
             }
@@ -410,7 +421,7 @@ public class LogoBuilder extends Module {
                     if (shulker.found()) {
                         int slot = ensureInHotbar(shulker);
                         if (BlockUtils.place(pos, Hand.MAIN_HAND, slot, true, 0, true, true, false)) {
-                            if (neededMaterial == Items.OBSIDIAN) obsidianStation = pos; 
+                            if (neededMaterial == Items.OBSIDIAN) obsidianStation = pos;
                             else if (neededMaterial == Items.CRYING_OBSIDIAN) cryingStation = pos;
                             activeStation = pos; state = State.OPENING; waitTicks = 10;
                         }
@@ -434,10 +445,10 @@ public class LogoBuilder extends Module {
                 Object provider = baritoneAPI.getMethod("getProvider").invoke(null);
                 Object primary = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
                 Object customGoalProcess = primary.getClass().getMethod("getCustomGoalProcess").invoke(primary);
-                
+
                 Class<?> goalNear = Class.forName("baritone.api.pathing.goals.GoalNear");
                 Object goal = goalNear.getConstructor(BlockPos.class, int.class).newInstance(pos, dist);
-                
+
                 Method setGoal = customGoalProcess.getClass().getMethod("setGoalAndPath", Class.forName("baritone.api.pathing.goals.Goal"));
                 setGoal.invoke(customGoalProcess, goal);
                 lastBaritoneGoal = pos;
@@ -458,8 +469,9 @@ public class LogoBuilder extends Module {
     }
 
     private void manualMove(BlockPos pos) {
+        assert mc.player != null;
         Vec3d target = Vec3d.ofCenter(pos);
-        Vec3d pPos = mc.player.getPos();
+        Vec3d pPos = mc.player.getEntityPos();
         double dx = target.x - pPos.x, dz = target.z - pPos.z;
         mc.player.setYaw((float) Math.toDegrees(Math.atan2(dz, dx)) - 90);
         mc.options.forwardKey.setPressed(true);
@@ -467,6 +479,7 @@ public class LogoBuilder extends Module {
     }
 
     private BlockPos findPlacementPos() {
+        assert mc.player != null;
         BlockPos center = mc.player.getBlockPos().down(2);
         if (isValidPlacement(center)) return center;
         for (int x = -2; x <= 2; x++) {
@@ -479,15 +492,18 @@ public class LogoBuilder extends Module {
     }
 
     private boolean isValidPlacement(BlockPos pos) {
-        return mc.world.getBlockState(pos).isReplaceable() && 
-               !mc.world.getBlockState(pos.up()).isReplaceable() && 
-               mc.player.getPos().distanceTo(Vec3d.ofCenter(pos)) <= range.get();
+        assert mc.world != null;
+        if (!mc.world.getBlockState(pos).isReplaceable() ||
+            mc.world.getBlockState(pos.up()).isReplaceable()) return false;
+        assert mc.player != null;
+        return mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(pos)) <= range.get();
     }
 
     private int ensureInHotbar(FindItemResult result) {
         if (result.isHotbar()) return result.slot();
-        InvUtils.move().from(result.slot()).toHotbar(mc.player.getInventory().selectedSlot);
-        return mc.player.getInventory().selectedSlot;
+        assert mc.player != null;
+        InvUtils.move().from(result.slot()).toHotbar(mc.player.getInventory().getSelectedSlot());
+        return mc.player.getInventory().getSelectedSlot();
     }
 
     private boolean placeBlock(BlockPos pos, Item item) {
@@ -504,6 +520,7 @@ public class LogoBuilder extends Module {
     private int countItem(Item item) {
         int count = 0;
         for (int i = 0; i < 36; i++) {
+            assert mc.player != null;
             ItemStack stack = mc.player.getInventory().getStack(i);
             if (stack.getItem() == item) count += stack.getCount();
         }

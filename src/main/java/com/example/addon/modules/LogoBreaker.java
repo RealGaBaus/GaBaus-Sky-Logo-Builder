@@ -1,7 +1,6 @@
 package com.example.addon.modules;
 
 import com.example.addon.GaBausSkyLogoBuilder;
-import com.example.addon.mixin.InventoryAccessor;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
@@ -10,7 +9,7 @@ import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Blocks;
-import net.minecraft.item.PickaxeItem;
+import net.minecraft.registry.tag.ItemTags;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -62,9 +61,9 @@ public class LogoBreaker extends Module {
 
         if (lastBaritoneGoal != null && mc.player.getVelocity().horizontalLengthSquared() < 0.0001) {
             baritoneStuckTimer++;
-            if (baritoneStuckTimer > 40) { 
-                lastBaritoneGoal = null; 
-                baritoneStuckTimer = 0; 
+            if (baritoneStuckTimer > 40) {
+                lastBaritoneGoal = null;
+                baritoneStuckTimer = 0;
             }
         } else {
             baritoneStuckTimer = 0;
@@ -82,14 +81,14 @@ public class LogoBreaker extends Module {
 
     private void doScan() {
         if (targetPos != null) {
-            if (isBlockValid(targetPos)) return; 
-            else targetPos = null; 
+            if (isBlockValid(targetPos)) return;
+            else targetPos = null;
         }
-
+        assert mc.player != null;
         List<BlockPos> validBlocks = new ArrayList<>();
         BlockPos pPos = mc.player.getBlockPos();
         int r = scanRange.get();
-        
+
         for (int x = -r; x <= r; x++) {
             for (int y = -r; y <= r; y++) {
                 for (int z = -r; z <= r; z++) {
@@ -110,7 +109,7 @@ public class LogoBreaker extends Module {
         if (chunkMode.get()) {
             if (activeChunkX == Integer.MAX_VALUE || validBlocks.stream().noneMatch(p -> (p.getX() >> 4) == activeChunkX && (p.getZ() >> 4) == activeChunkZ)) {
                 BlockPos closest = validBlocks.stream()
-                    .min(Comparator.comparingDouble(p -> mc.player.getPos().distanceTo(Vec3d.ofCenter(p))))
+                    .min(Comparator.comparingDouble(p -> mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(p))))
                     .get();
                 activeChunkX = closest.getX() >> 4;
                 activeChunkZ = closest.getZ() >> 4;
@@ -123,25 +122,27 @@ public class LogoBreaker extends Module {
             return;
         }
 
-        validBlocks.sort(Comparator.comparingDouble(p -> mc.player.getPos().distanceTo(Vec3d.ofCenter(p))));
+        validBlocks.sort(Comparator.comparingDouble(p -> mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(p))));
         targetPos = validBlocks.get(0);
     }
 
     private boolean isBlockValid(BlockPos pos) {
+        assert mc.world != null;
+        assert mc.player != null;
         net.minecraft.block.Block block = mc.world.getBlockState(pos).getBlock();
         boolean isCorrectType = (breakObsidian.get() && block == Blocks.OBSIDIAN) || (breakCryingObsidian.get() && block == Blocks.CRYING_OBSIDIAN);
         if (!isCorrectType) return false;
 
         if (protectFeet.get()) {
-            Vec3d pVec = mc.player.getPos();
+            Vec3d pVec = mc.player.getEntityPos();
             BlockPos pPos = mc.player.getBlockPos();
-            
+
             double dx = Math.abs(pos.getX() + 0.5 - pVec.x);
             double dz = Math.abs(pos.getZ() + 0.5 - pVec.z);
             if (dx * dx + dz * dz < 0.7) {
                 if (pos.getY() <= pPos.getY()) return false;
             }
-            
+
             if (!mc.player.isOnGround()) {
                 Vec3d velocity = mc.player.getVelocity();
                 BlockPos predictedPos = new BlockPos((int)Math.floor(pVec.x + velocity.x), (int)Math.floor(pVec.y), (int)Math.floor(pVec.z + velocity.z));
@@ -154,16 +155,17 @@ public class LogoBreaker extends Module {
     }
 
     private void tickBreakingLogic() {
-        double dist = mc.player.getPos().distanceTo(Vec3d.ofCenter(targetPos));
-        
+        assert mc.player != null;
+        double dist = mc.player.getEntityPos().distanceTo(Vec3d.ofCenter(targetPos));
+
         double breakRange = range.get();
         double moveRange = breakRange + 0.5;
 
         if (dist <= breakRange) {
             stopBaritone();
             mc.options.forwardKey.setPressed(false);
-            
-            FindItemResult pickaxe = InvUtils.find(stack -> stack.getItem() instanceof PickaxeItem);
+
+            FindItemResult pickaxe = InvUtils.find(stack -> stack.isIn(ItemTags.PICKAXES));
             if (!pickaxe.found()) {
                 error("No pickaxe found!");
                 toggle();
@@ -172,9 +174,10 @@ public class LogoBreaker extends Module {
 
             int slot = ensureInHotbar(pickaxe);
             InvUtils.swap(slot, false);
-            
+
             Vec3d center = Vec3d.ofCenter(targetPos);
             Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
+                assert mc.interactionManager != null;
                 mc.interactionManager.updateBlockBreakingProgress(targetPos, Direction.UP);
                 mc.player.swingHand(Hand.MAIN_HAND);
             });
@@ -185,8 +188,9 @@ public class LogoBreaker extends Module {
 
     private int ensureInHotbar(FindItemResult result) {
         if (result.isHotbar()) return result.slot();
-        InvUtils.move().from(result.slot()).toHotbar(mc.player.getInventory().selectedSlot);
-        return mc.player.getInventory().selectedSlot;
+        assert mc.player != null;
+        InvUtils.move().from(result.slot()).toHotbar(mc.player.getInventory().getSelectedSlot());
+        return mc.player.getInventory().getSelectedSlot();
     }
 
     private void moveTowards(BlockPos pos, int dist) {
@@ -197,10 +201,10 @@ public class LogoBreaker extends Module {
                 Object provider = baritoneAPI.getMethod("getProvider").invoke(null);
                 Object primary = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
                 Object customGoalProcess = primary.getClass().getMethod("getCustomGoalProcess").invoke(primary);
-                
+
                 Class<?> goalNear = Class.forName("baritone.api.pathing.goals.GoalNear");
                 Object goal = goalNear.getConstructor(BlockPos.class, int.class).newInstance(pos, dist);
-                
+
                 Method setGoal = customGoalProcess.getClass().getMethod("setGoalAndPath", Class.forName("baritone.api.pathing.goals.Goal"));
                 setGoal.invoke(customGoalProcess, goal);
                 lastBaritoneGoal = pos;
@@ -222,7 +226,8 @@ public class LogoBreaker extends Module {
 
     private void manualMove(BlockPos pos) {
         Vec3d target = Vec3d.ofCenter(pos);
-        Vec3d pPos = mc.player.getPos();
+        assert mc.player != null;
+        Vec3d pPos = mc.player.getEntityPos();
         double dx = target.x - pPos.x, dz = target.z - pPos.z;
         mc.player.setYaw((float) Math.toDegrees(Math.atan2(dz, dx)) - 90);
         mc.options.forwardKey.setPressed(true);
