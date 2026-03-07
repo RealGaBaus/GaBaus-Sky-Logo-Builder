@@ -51,11 +51,11 @@ public class AutoRestock extends Module {
 
     private final Setting<String> helperName = sgGeneral.add(new StringSetting.Builder().name("helper-name").defaultValue("HelperName").visible(() -> mode.get() == Mode.BaseGuardian).build());
     private final Setting<String> homeBaseName = sgGeneral.add(new StringSetting.Builder().name("home-base-name").defaultValue("last-location").visible(() -> mode.get() == Mode.BaseGuardian).build());
-    
+
     private final Setting<String> kitbotName = sgGeneral.add(new StringSetting.Builder().name("kitbot-name").defaultValue("Kitbot").visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<String> obsidianKitCommand = sgGeneral.add(new StringSetting.Builder().name("obsidian-command").description("Command to send when obsidian is needed.").defaultValue("$kit obby 1").visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<String> cryingKitCommand = sgGeneral.add(new StringSetting.Builder().name("crying-command").description("Command to send when crying obsidian is needed.").defaultValue("$kit crying 1").visible(() -> mode.get() == Mode.Kitbot).build());
-    
+
     private final Setting<Boolean> autoAcceptTpa = sgGeneral.add(new BoolSetting.Builder().name("auto-accept-tpa").description("Automatically accept TPA requests from the kitbot.").defaultValue(true).visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<String> tpaMessageTrigger = sgGeneral.add(new StringSetting.Builder().name("tpa-message-trigger").description("The text to look for in chat to detect a TPA request.").defaultValue("wants to teleport to you").visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<String> tpAcceptCommand = sgGeneral.add(new StringSetting.Builder().name("tp-accept-command").description("The command used to accept a TPA request.").defaultValue("/tpy KitBot").visible(() -> mode.get() == Mode.Kitbot).build());
@@ -66,14 +66,14 @@ public class AutoRestock extends Module {
     private final Setting<Integer> obsidianToTake = sgGeneral.add(new IntSetting.Builder().name("obsidian-shulkers").description("How many obsidian shulkers to take.").defaultValue(3).min(0).sliderMax(10).visible(() -> mode.get() == Mode.BaseGuardian).build());
     private final Setting<Integer> cryingToTake = sgGeneral.add(new IntSetting.Builder().name("crying-shulkers").description("How many crying obsidian shulkers to take.").defaultValue(3).min(0).sliderMax(10).visible(() -> mode.get() == Mode.BaseGuardian).build());
     private final Setting<Boolean> useBaritone = sgGeneral.add(new BoolSetting.Builder().name("use-baritone").defaultValue(true).build());
-    
+
     private final Setting<BlockPos> obsidianChestPos = sgCoords.add(new BlockPosSetting.Builder().name("obsidian-chest").defaultValue(BlockPos.ORIGIN).visible(() -> mode.get() == Mode.BaseGuardian).build());
     private final Setting<BlockPos> cryingChestPos = sgCoords.add(new BlockPosSetting.Builder().name("crying-obsidian-chest").defaultValue(BlockPos.ORIGIN).visible(() -> mode.get() == Mode.BaseGuardian).build());
 
     private final Setting<Integer> pearlDelay = sgPearl.add(new IntSetting.Builder().name("pearl-delay").description("Delay in ticks after detecting the pearl before throwing it.").defaultValue(40).min(0).sliderMax(100).visible(() -> mode.get() == Mode.BaseGuardian).build());
 
     private enum State {
-        IDLE, HOMES_DEL, HOMES_SET, ALERT, WAIT_TP, 
+        IDLE, HOMES_DEL, HOMES_SET, ALERT, WAIT_TP,
         LOOK_DOWN, THROW,
         GOTO_OBS, OPEN_OBS, LOOT_OBS, GOTO_CRY, OPEN_CRY, LOOT_CRY, RETURN,
         KIT_MOVE_TO_SAFE, KIT_WAIT, KIT_SEND, KIT_CHECK, KIT_PICKUP
@@ -95,13 +95,13 @@ public class AutoRestock extends Module {
     }
 
     @Override
-    public void onActivate() { 
+    public void onActivate() {
         tpaCooldown = 0;
         shulkerPickedUp = false;
         tpaAccepted = false;
         if (mode.get() == Mode.BaseGuardian) {
-            state = State.HOMES_DEL; 
-            timer = 0; 
+            state = State.HOMES_DEL;
+            timer = 0;
         } else {
             initLitematica();
             state = State.KIT_MOVE_TO_SAFE;
@@ -173,18 +173,18 @@ public class AutoRestock extends Module {
         switch (state) {
             case HOMES_DEL -> { sendMessage("/delhome " + homeBaseName.get()); state = State.HOMES_SET; timer = 15; }
             case HOMES_SET -> { sendMessage("/sethome " + homeBaseName.get()); state = State.ALERT; timer = 15; }
-            case ALERT -> { 
-                sendMessage("/msg " + helperName.get() + " #restock"); 
-                state = State.WAIT_TP; 
-                timer = 0; 
+            case ALERT -> {
+                sendMessage("/msg " + helperName.get() + " #restock");
+                state = State.WAIT_TP;
+                timer = 0;
                 info("Message sent. Waiting for TP and pearl...");
             }
-            case WAIT_TP -> { 
-                if (mc.player.getBlockPos().isWithinDistance(obsidianChestPos.get(), 60)) { 
+            case WAIT_TP -> {
+                if (mc.player.getBlockPos().isWithinDistance(obsidianChestPos.get(), 60)) {
                     if (InvUtils.find(Items.ENDER_PEARL).found()) {
                         info("TP detected and pearl found. Applying pearl delay...");
-                        stop(); 
-                        state = State.LOOK_DOWN; 
+                        stop();
+                        state = State.LOOK_DOWN;
                         timer = pearlDelay.get();
                     } else if (mc.player.age % 60 == 0) {
                         info("TP detected but pearl is missing. Waiting for pearl to start...");
@@ -196,7 +196,7 @@ public class AutoRestock extends Module {
             case LOOK_DOWN -> {
                 double centerX = Math.floor(mc.player.getX()) + 0.5;
                 double centerZ = Math.floor(mc.player.getZ()) + 0.5;
-                
+
                 BlockPos soulSand = findNearestSoulSand();
                 float targetYaw = mc.player.getYaw();
                 float targetPitch = 90.0F;
@@ -208,26 +208,26 @@ public class AutoRestock extends Module {
                 }
 
                 mc.player.refreshPositionAndAngles(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch);
-                
+
                 if (mc.getNetworkHandler() != null) {
-                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch, mc.player.isOnGround()));
+                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                 }
-                
+
                 pearlCount = InvUtils.find(Items.ENDER_PEARL).count();
                 state = State.THROW;
                 timer = 10;
             }
             case THROW -> {
                 FindItemResult pearl = InvUtils.find(Items.ENDER_PEARL);
-                
+
                 if (pearl.found()) {
                     if (!pearl.isHotbar()) {
-                        InvUtils.move().from(pearl.slot()).toHotbar(mc.player.getInventory().selectedSlot);
+                        InvUtils.move().from(pearl.slot()).toHotbar(mc.player.getInventory().getSelectedSlot());
                     }
 
                     double centerX = Math.floor(mc.player.getX()) + 0.5;
                     double centerZ = Math.floor(mc.player.getZ()) + 0.5;
-                    
+
                     BlockPos soulSand = findNearestSoulSand();
                     float targetYaw = mc.player.getYaw();
                     float targetPitch = 90.0F;
@@ -240,22 +240,22 @@ public class AutoRestock extends Module {
 
                     mc.player.setVelocity(0, mc.player.getVelocity().y, 0);
                     mc.player.setSprinting(false);
-                    
+
                     mc.options.forwardKey.setPressed(false);
                     mc.options.backKey.setPressed(false);
                     mc.options.leftKey.setPressed(false);
                     mc.options.rightKey.setPressed(false);
-                    
+
                     mc.player.refreshPositionAndAngles(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch);
-                    
+
                     if (mc.getNetworkHandler() != null) {
-                        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch, mc.player.isOnGround()));
+                        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                     }
 
                     InvUtils.swap(pearl.slot(), true);
                     mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                     InvUtils.swapBack();
-                    
+
                     int newCount = InvUtils.find(Items.ENDER_PEARL).count();
                     if (newCount < pearlCount) {
                         info("Pearl successfully launched towards the Soul Sand.");
@@ -339,7 +339,7 @@ public class AutoRestock extends Module {
             case KIT_SEND -> {
                 LogoBuilder logoBuilder = Modules.get().get(LogoBuilder.class);
                 String cmd = obsidianKitCommand.get(); // Default
-                
+
                 if (logoBuilder != null && logoBuilder.neededMaterial != null) {
                     if (logoBuilder.neededMaterial == Items.CRYING_OBSIDIAN) {
                         cmd = cryingKitCommand.get();
@@ -354,7 +354,7 @@ public class AutoRestock extends Module {
                 if (cmd.contains("(kitbotname)")) {
                     cmd = cmd.replace("(kitbotname)", kitbotName.get());
                 }
-                
+
                 sendMessage(cmd);
                 tpaAccepted = false;
                 state = State.KIT_CHECK;
@@ -379,7 +379,7 @@ public class AutoRestock extends Module {
                         state = State.KIT_SEND;
                     }
                 } else {
-                    if (!tpaAccepted && timer <= 0) finishRestock(); 
+                    if (!tpaAccepted && timer <= 0) finishRestock();
                 }
             }
             case KIT_PICKUP -> {
@@ -387,7 +387,7 @@ public class AutoRestock extends Module {
                     state = State.KIT_CHECK;
                     return;
                 }
-                if (walkTo(targetItem.getPos())) {
+                if (walkTo(targetItem.getEntityPos())) {
                     timer = 20;
                     shulkerPickedUp = true;
                     state = State.KIT_CHECK;
@@ -406,9 +406,11 @@ public class AutoRestock extends Module {
     }
 
     private ItemEntity findDroppedShulker() {
+        assert mc.player != null;
         int pCX = mc.player.getBlockPos().getX() >> 4;
         int pCZ = mc.player.getBlockPos().getZ() >> 4;
 
+        assert mc.world != null;
         for (Entity entity : mc.world.getEntities()) {
             if (entity instanceof ItemEntity item && entity.isAlive()) {
                 if ((entity.getBlockX() >> 4) == pCX && (entity.getBlockZ() >> 4) == pCZ) {
@@ -422,6 +424,7 @@ public class AutoRestock extends Module {
     }
 
     private BlockPos findSafeChunkCenter() {
+        assert mc.player != null;
         int pCX = mc.player.getBlockPos().getX() >> 4;
         int pCZ = mc.player.getBlockPos().getZ() >> 4;
         int pY = mc.player.getBlockPos().getY();
@@ -433,7 +436,7 @@ public class AutoRestock extends Module {
                     if (Math.max(Math.abs(rx), Math.abs(rz)) == dist) {
                         int cx = pCX + rx;
                         int cz = pCZ + rz;
-                        
+
                         if (isChunkSolidAtY(cx, cz, pY - 1)) {
                             return new BlockPos((cx << 4) + 8, pY, (cz << 4) + 8);
                         }
@@ -473,7 +476,7 @@ public class AutoRestock extends Module {
     private boolean walkTo(Vec3d target) {
         BlockPos goalPos = BlockPos.ofFloored(target);
         double dist = Math.sqrt(mc.player.squaredDistanceTo(Vec3d.ofCenter(goalPos)));
-        
+
         if (useBaritone.get()) {
             if (!goalPos.equals(lastBaritoneGoal)) {
                 try {
@@ -546,7 +549,7 @@ public class AutoRestock extends Module {
     private void lootShulkers(Item material, int targetCount) {
         GenericContainerScreen screen = (GenericContainerScreen) mc.currentScreen;
         int size = screen.getScreenHandler().getInventory().size() - 36;
-        
+
         int currentCount = 0;
         for (int i = 0; i < 36; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
