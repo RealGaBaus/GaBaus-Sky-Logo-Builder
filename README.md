@@ -2,7 +2,7 @@
 #### Make an issue or DM me on discord `bautti_.` with any questions (Check the FAQ first)
 #### Pull Requests are welcome.
 
-**Currently works on 8b8t, and will soon be updated to 6b6t.**
+**Currently works on 8b8t, and 6b6t kitbots.**
 
 ## Features
 ### Modules
