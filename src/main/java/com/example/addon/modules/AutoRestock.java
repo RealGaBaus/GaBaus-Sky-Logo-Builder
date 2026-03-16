@@ -63,6 +63,7 @@ public class AutoRestock extends Module {
     private final Setting<Integer> kitSafeRadius = sgGeneral.add(new IntSetting.Builder().name("kit-safe-radius").description("Radius in chunks to search for a solid floor.").defaultValue(5).min(0).sliderMax(20).visible(() -> mode.get() == Mode.Kitbot).build());
     private final Setting<Boolean> repeatUntilFound = sgGeneral.add(new BoolSetting.Builder().name("repeat-until-found").description("Keep sending the command until a new shulker is detected.").defaultValue(true).visible(() -> mode.get() == Mode.Kitbot).build());
 
+
     private final Setting<Integer> obsidianToTake = sgGeneral.add(new IntSetting.Builder().name("obsidian-shulkers").description("How many obsidian shulkers to take.").defaultValue(3).min(0).sliderMax(10).visible(() -> mode.get() == Mode.BaseGuardian).build());
     private final Setting<Integer> cryingToTake = sgGeneral.add(new IntSetting.Builder().name("crying-shulkers").description("How many crying obsidian shulkers to take.").defaultValue(3).min(0).sliderMax(10).visible(() -> mode.get() == Mode.BaseGuardian).build());
     private final Setting<Boolean> useBaritone = sgGeneral.add(new BoolSetting.Builder().name("use-baritone").defaultValue(true).build());
@@ -89,6 +90,8 @@ public class AutoRestock extends Module {
     private ItemEntity targetItem;
     private BlockPos lastBaritoneGoal;
     private Method getSchematicWorldMethod, getBlockStateMethod;
+
+    private BlockPos shulkerTargetPos;
 
     public AutoRestock() {
         super(GaBausSkyLogoBuilder.CATEGORY, "auto-restock", "stasis restocker.");
@@ -315,87 +318,115 @@ public class AutoRestock extends Module {
         }
     }
 
-    private void tickKitbot() {
-        switch (state) {
-            case KIT_MOVE_TO_SAFE -> {
-                BlockPos safeCenter = findSafeChunkCenter();
-                if (safeCenter != null) {
-                    if (walkTo(Vec3d.ofCenter(safeCenter))) {
-                        info("Kitbot: Arrived at safe chunk center.");
-                        state = State.KIT_WAIT;
-                        timer = restockDelay.get() * 60 * 20;
-                        info("Kitbot: Waiting " + restockDelay.get() + " minutes before sending command...");
-                    }
-                } else {
-                    warning("Kitbot: No safe completed chunk found nearby. Waiting here.");
+
+private void tickKitbot() {
+    switch (state) {
+        case KIT_MOVE_TO_SAFE -> {
+            BlockPos safeCenter = findSafeChunkCenter();
+            if (safeCenter != null) {
+                if (walkTo(Vec3d.ofCenter(safeCenter))) {
+                    info("Kitbot: Arrived at safe chunk center.");
                     state = State.KIT_WAIT;
                     timer = restockDelay.get() * 60 * 20;
+                    info("Kitbot: Waiting " + restockDelay.get() + " minutes before sending command...");
                 }
+            } else {
+                warning("Kitbot: No safe completed chunk found nearby. Waiting here.");
+                state = State.KIT_WAIT;
+                timer = restockDelay.get() * 60 * 20;
             }
-            case KIT_WAIT -> {
-                state = State.KIT_SEND;
-                timer = 0;
-            }
-            case KIT_SEND -> {
-                LogoBuilder logoBuilder = Modules.get().get(LogoBuilder.class);
-                String cmd = obsidianKitCommand.get(); // Default
-                
-                if (logoBuilder != null && logoBuilder.neededMaterial != null) {
-                    if (logoBuilder.neededMaterial == Items.CRYING_OBSIDIAN) {
-                        cmd = cryingKitCommand.get();
-                        info("Kitbot: Crying Obsidian needed. Using: " + cmd);
-                    } else {
-                        info("Kitbot: Obsidian needed. Using: " + cmd);
-                    }
+        }
+        case KIT_WAIT -> {
+            state = State.KIT_SEND;
+            timer = 0;
+        }
+        case KIT_SEND -> {
+            LogoBuilder logoBuilder = Modules.get().get(LogoBuilder.class);
+            String cmd = obsidianKitCommand.get();
+            
+            if (logoBuilder != null && logoBuilder.neededMaterial != null) {
+                if (logoBuilder.neededMaterial == Items.CRYING_OBSIDIAN) {
+                    cmd = cryingKitCommand.get();
+                    info("Kitbot: Crying Obsidian needed. Using: " + cmd);
                 } else {
-                    info("Kitbot: No specific material detected from LogoBuilder, using Obsidian command by default.");
+                    info("Kitbot: Obsidian needed. Using: " + cmd);
                 }
+            } else {
+                info("Kitbot: No specific material detected from LogoBuilder, using Obsidian command by default.");
+            }
 
-                if (cmd.contains("(kitbotname)")) {
-                    cmd = cmd.replace("(kitbotname)", kitbotName.get());
-                }
-                
-                sendMessage(cmd);
-                tpaAccepted = false;
-                state = State.KIT_CHECK;
-                timer = 100;
+            if (cmd.contains("(kitbotname)")) {
+                cmd = cmd.replace("(kitbotname)", kitbotName.get());
             }
-            case KIT_CHECK -> {
-                targetItem = findDroppedShulker();
-                if (targetItem != null) {
-                    info("Kitbot: Found shulker on floor! Going to pick it up.");
-                    state = State.KIT_PICKUP;
-                    return;
-                }
+            
+            sendMessage(cmd);
+            tpaAccepted = false;
+            state = State.KIT_CHECK;
+            timer = 100;
+        }
+        
+case KIT_CHECK -> {
+    if (countShulkers() > initialShulkerCount || shulkerPickedUp) {
+        info("Kitbot: Shulker detected in inventory. Finalizing...");
+        finishRestock();
+        return;
+    }
 
-                int currentShulkers = countShulkers();
-                if (currentShulkers > initialShulkerCount || shulkerPickedUp) {
-                    if (findDroppedShulker() == null) {
-                        info("Kitbot: Restock complete.");
-                        finishRestock();
-                    }
-                } else if (repeatUntilFound.get() && !tpaAccepted) {
-                    if (mc.player.age % 600 == 0) {
-                        state = State.KIT_SEND;
-                    }
-                } else {
-                    if (!tpaAccepted && timer <= 0) finishRestock(); 
-                }
-            }
-            case KIT_PICKUP -> {
-                if (targetItem == null || !targetItem.isAlive()) {
-                    state = State.KIT_CHECK;
-                    return;
-                }
-                if (walkTo(targetItem.getPos())) {
-                    timer = 20;
-                    shulkerPickedUp = true;
-                    state = State.KIT_CHECK;
-                }
-            }
-            default -> {}
+    BlockPos safeCenter = findSafeChunkCenter();
+    if (safeCenter != null) {
+        if (mc.player.squaredDistanceTo(Vec3d.ofCenter(safeCenter)) > 4.0) {
+            state = State.KIT_MOVE_TO_SAFE;
+            return;
         }
     }
+
+    targetItem = findDroppedShulker();
+    if (targetItem != null) {
+        shulkerTargetPos = targetItem.getBlockPos();
+        state = State.KIT_PICKUP;
+        return;
+    }
+
+    if (repeatUntilFound.get() && !tpaAccepted) {
+        if (mc.player.age % 600 == 0) { 
+            info("Kitbot: No Shulker found. Retrying command...");
+            state = State.KIT_SEND;
+        }
+    }
+}
+
+case KIT_PICKUP -> {
+
+    if (targetItem == null || !targetItem.isAlive()) {
+        state = State.KIT_CHECK; 
+        return;
+    }
+
+    shulkerTargetPos = targetItem.getBlockPos();
+
+    if (walkTo(Vec3d.ofCenter(shulkerTargetPos))) {
+        int currentShulkers = countShulkers();
+
+        if (currentShulkers > initialShulkerCount) {
+            shulkerPickedUp = true;
+            info("Kitbot: Successfully picked up shulker!");
+    } else {
+        if (timer <= 0) {
+            info("Kitbot: Arrived, waiting for pickup...");
+            timer = 20; 
+        }
+    }
+
+        shulkerTargetPos = null;
+        timer = 30;
+        state = State.KIT_CHECK;
+    }
+}
+        default -> {}
+    }
+
+}    
+    
 
     private void finishRestock() {
         Module logoBuilder = Modules.get().get(LogoBuilder.class);
@@ -405,21 +436,24 @@ public class AutoRestock extends Module {
         if (isActive()) toggle();
     }
 
-    private ItemEntity findDroppedShulker() {
-        int pCX = mc.player.getBlockPos().getX() >> 4;
-        int pCZ = mc.player.getBlockPos().getZ() >> 4;
+private ItemEntity findDroppedShulker() {
+    int pCX = mc.player.getBlockPos().getX() >> 4;
+    int pCZ = mc.player.getBlockPos().getZ() >> 4;
+    double pY = mc.player.getY();
 
-        for (Entity entity : mc.world.getEntities()) {
-            if (entity instanceof ItemEntity item && entity.isAlive()) {
-                if ((entity.getBlockX() >> 4) == pCX && (entity.getBlockZ() >> 4) == pCZ) {
+    for (Entity entity : mc.world.getEntities()) {
+        if (entity instanceof ItemEntity item && entity.isAlive()) {
+            if ((entity.getBlockX() >> 4) == pCX && (entity.getBlockZ() >> 4) == pCZ) {
+                if (Math.abs(entity.getY() - pY) < 2.0) {
                     if (Block.getBlockFromItem(item.getStack().getItem()) instanceof ShulkerBoxBlock) {
                         return item;
                     }
                 }
             }
         }
-        return null;
     }
+    return null;
+}
 
     private BlockPos findSafeChunkCenter() {
         int pCX = mc.player.getBlockPos().getX() >> 4;
@@ -470,54 +504,79 @@ public class AutoRestock extends Module {
         return count;
     }
 
-    private boolean walkTo(Vec3d target) {
-        BlockPos goalPos = BlockPos.ofFloored(target);
-        double dist = Math.sqrt(mc.player.squaredDistanceTo(Vec3d.ofCenter(goalPos)));
-        
-        if (useBaritone.get()) {
-            if (!goalPos.equals(lastBaritoneGoal)) {
-                try {
-                    Class<?> baritoneAPI = Class.forName("baritone.api.BaritoneAPI");
-                    Object provider = baritoneAPI.getMethod("getProvider").invoke(null);
-                    Object primary = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
-                    Object customGoalProcess = primary.getClass().getMethod("getCustomGoalProcess").invoke(primary);
+private boolean walkTo(Vec3d target) {
+    BlockPos goalPos = BlockPos.ofFloored(target);
+    double dist = Math.sqrt(mc.player.squaredDistanceTo(Vec3d.ofCenter(goalPos)));
 
-                    Class<?> goalBlock = Class.forName("baritone.api.pathing.goals.GoalBlock");
-                    Object goal = goalBlock.getConstructor(BlockPos.class).newInstance(goalPos);
+if (useBaritone.get()) {
 
-                    Method setGoalAndPath = customGoalProcess.getClass().getMethod("setGoalAndPath", Class.forName("baritone.api.pathing.goals.Goal"));
-                    setGoalAndPath.invoke(customGoalProcess, goal);
-                    lastBaritoneGoal = goalPos;
-                } catch (Exception e) {
-                    return manualWalk(Vec3d.ofCenter(goalPos));
-                }
-            }
-            if (dist < 1.3) { stop(); return true; }
-            return false;
-        } else {
+    if (!goalPos.equals(lastBaritoneGoal)) {
+
+        stopBaritone();
+
+        try {
+            Class<?> baritoneAPI = Class.forName("baritone.api.BaritoneAPI");
+            Object provider = baritoneAPI.getMethod("getProvider").invoke(null);
+            Object primary = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
+            Object customGoalProcess = primary.getClass().getMethod("getCustomGoalProcess").invoke(primary);
+
+            Class<?> goalBlock = Class.forName("baritone.api.pathing.goals.GoalBlock");
+            Object goal = goalBlock.getConstructor(BlockPos.class).newInstance(goalPos);
+
+            customGoalProcess.getClass()
+                .getMethod("setGoalAndPath", Class.forName("baritone.api.pathing.goals.Goal"))
+                .invoke(customGoalProcess, goal);
+
+            lastBaritoneGoal = goalPos;
+
+        } catch (Exception e) {
             return manualWalk(Vec3d.ofCenter(goalPos));
         }
     }
 
-    private boolean manualWalk(Vec3d target) {
-        double dist = Math.sqrt(mc.player.squaredDistanceTo(target.x, mc.player.getY(), target.z));
-        if (dist < 0.2) { stop(); return true; }
-        double dx = target.x - mc.player.getX();
-        double dz = target.z - mc.player.getZ();
-        float yaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90;
-        mc.player.setYaw(yaw);
-        Rotations.rotate(yaw, mc.player.getPitch());
-        mc.options.forwardKey.setPressed(true);
-        if (mc.player.horizontalCollision && mc.player.isOnGround()) mc.player.jump();
+        if (dist < 1.3) {
+            stop();
+            return true;
+        }
+
         return false;
     }
 
-    private void stop() {
-        mc.options.forwardKey.setPressed(false);
-        mc.options.sneakKey.setPressed(false);
-        if (mc.player != null) mc.player.setVelocity(0, mc.player.getVelocity().y, 0);
-        stopBaritone();
+    return manualWalk(Vec3d.ofCenter(goalPos));
+}
+
+private boolean manualWalk(Vec3d target) {
+
+    double dist = Math.sqrt(mc.player.squaredDistanceTo(target));
+
+    if (dist < 0.2) {
+        stop();
+        return true;
     }
+
+    double dx = target.x - mc.player.getX();
+    double dz = target.z - mc.player.getZ();
+
+    float yaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90;
+
+    mc.player.setYaw(yaw);
+
+    Rotations.rotate(yaw, mc.player.getPitch());
+
+    mc.options.forwardKey.setPressed(true);
+
+    return false;
+}
+
+private void stop() {
+    mc.options.forwardKey.setPressed(false);
+    mc.options.sneakKey.setPressed(false);
+
+    if (mc.player != null)
+        mc.player.setVelocity(0, mc.player.getVelocity().y, 0);
+
+    lastBaritoneGoal = null;
+}
 
     private void stopBaritone() {
         lastBaritoneGoal = null;
