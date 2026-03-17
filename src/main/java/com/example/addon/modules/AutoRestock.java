@@ -85,6 +85,7 @@ public class AutoRestock extends Module {
     private int pearlCount = 0;
     private int initialShulkerCount = 0;
     private int tpaCooldown = 0;
+    private int kitRetryTimer = 0;
     private boolean shulkerPickedUp = false;
     private boolean tpaAccepted = false;
     private ItemEntity targetItem;
@@ -102,6 +103,7 @@ public class AutoRestock extends Module {
         tpaCooldown = 0;
         shulkerPickedUp = false;
         tpaAccepted = false;
+        kitRetryTimer = 0;
         if (mode.get() == Mode.BaseGuardian) {
             state = State.HOMES_DEL; 
             timer = 0; 
@@ -325,15 +327,14 @@ private void tickKitbot() {
             BlockPos safeCenter = findSafeChunkCenter();
             if (safeCenter != null) {
                 if (walkTo(Vec3d.ofCenter(safeCenter))) {
-                    info("Kitbot: Arrived at safe chunk center.");
+                    info("Kitbot: Arrived at safe chunk center. Waiting 5 seconds...");
                     state = State.KIT_WAIT;
-                    timer = restockDelay.get() * 60 * 20;
-                    info("Kitbot: Waiting " + restockDelay.get() + " minutes before sending command...");
+                    timer = 100;
                 }
             } else {
-                warning("Kitbot: No safe completed chunk found nearby. Waiting here.");
+                warning("Kitbot: No safe completed chunk found nearby. Waiting 5 seconds here...");
                 state = State.KIT_WAIT;
-                timer = restockDelay.get() * 60 * 20;
+                timer = 100;
             }
         }
         case KIT_WAIT -> {
@@ -363,63 +364,52 @@ private void tickKitbot() {
             tpaAccepted = false;
             state = State.KIT_CHECK;
             timer = 100;
+            kitRetryTimer = restockDelay.get() * 60 * 20;
         }
         
 case KIT_CHECK -> {
-    if (countShulkers() > initialShulkerCount || shulkerPickedUp) {
-        info("Kitbot: Shulker detected in inventory. Finalizing...");
-        finishRestock();
-        return;
-    }
+            targetItem = findDroppedShulker();
 
-    BlockPos safeCenter = findSafeChunkCenter();
-    if (safeCenter != null) {
-        if (mc.player.squaredDistanceTo(Vec3d.ofCenter(safeCenter)) > 4.0) {
-            state = State.KIT_MOVE_TO_SAFE;
-            return;
+            if (targetItem != null) {
+                shulkerTargetPos = targetItem.getBlockPos();
+                state = State.KIT_PICKUP;
+                return;
+            }
+
+            if (countShulkers() > initialShulkerCount || shulkerPickedUp) {
+                info("Kitbot: Cleaning complete. No more shulkers. Back to work...");
+                finishRestock();
+                return;
+            }
+
+            if (repeatUntilFound.get() && !tpaAccepted) {
+                if (kitRetryTimer > 0) {
+                    kitRetryTimer--;
+                } else { 
+                    info("Kitbot: Waiting for material... Retrying command.");
+                    state = State.KIT_SEND;
+                }
+            }
         }
-    }
-
-    targetItem = findDroppedShulker();
-    if (targetItem != null) {
-        shulkerTargetPos = targetItem.getBlockPos();
-        state = State.KIT_PICKUP;
-        return;
-    }
-
-    if (repeatUntilFound.get() && !tpaAccepted) {
-        if (mc.player.age % 600 == 0) { 
-            info("Kitbot: No Shulker found. Retrying command...");
-            state = State.KIT_SEND;
-        }
-    }
-}
 
 case KIT_PICKUP -> {
-
     if (targetItem == null || !targetItem.isAlive()) {
-        state = State.KIT_CHECK; 
+        state = State.KIT_CHECK;
         return;
     }
 
-    shulkerTargetPos = targetItem.getBlockPos();
-
-    if (walkTo(Vec3d.ofCenter(shulkerTargetPos))) {
-        int currentShulkers = countShulkers();
-
-        if (currentShulkers > initialShulkerCount) {
-            shulkerPickedUp = true;
-            info("Kitbot: Successfully picked up shulker!");
-    } else {
+    if (walkTo(targetItem.getPos())) {
+        
         if (timer <= 0) {
-            info("Kitbot: Arrived, waiting for pickup...");
-            timer = 20; 
+            shulkerPickedUp = true; 
+            
+            timer = 10; 
+            
+            state = State.KIT_CHECK;
+            
+            shulkerTargetPos = null;
+            targetItem = null;
         }
-    }
-
-        shulkerTargetPos = null;
-        timer = 30;
-        state = State.KIT_CHECK;
     }
 }
         default -> {}
@@ -441,18 +431,28 @@ private ItemEntity findDroppedShulker() {
     int pCZ = mc.player.getBlockPos().getZ() >> 4;
     double pY = mc.player.getY();
 
+    ItemEntity closestInChunk = null; 
+    double minDistance = Double.MAX_VALUE; 
+
     for (Entity entity : mc.world.getEntities()) {
         if (entity instanceof ItemEntity item && entity.isAlive()) {
             if ((entity.getBlockX() >> 4) == pCX && (entity.getBlockZ() >> 4) == pCZ) {
                 if (Math.abs(entity.getY() - pY) < 2.0) {
+                    
                     if (Block.getBlockFromItem(item.getStack().getItem()) instanceof ShulkerBoxBlock) {
-                        return item;
+                        
+                        double dist = mc.player.squaredDistanceTo(entity);
+                        if (dist < minDistance) {
+                            minDistance = dist;
+                            closestInChunk = item;
+                        }
                     }
                 }
             }
         }
     }
-    return null;
+    
+    return closestInChunk;
 }
 
     private BlockPos findSafeChunkCenter() {
