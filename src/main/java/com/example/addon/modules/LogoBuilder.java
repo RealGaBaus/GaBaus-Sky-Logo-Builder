@@ -2,6 +2,8 @@ package com.example.addon.modules;
 
 import com.example.addon.GaBausSkyLogoBuilder;
 import com.example.addon.mixin.InventoryAccessor;
+import meteordevelopment.meteorclient.events.game.OpenScreenEvent;
+import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
@@ -20,6 +22,7 @@ import net.minecraft.item.BlockItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
@@ -44,14 +47,30 @@ public class LogoBuilder extends Module {
     private final Setting<Boolean> airPlace = sgGeneral.add(new BoolSetting.Builder().name("air-place").description("If disabled, the bot will move to positions but won't place schematic blocks.").defaultValue(true).build());
     private final Setting<Boolean> chunkMode = sgGeneral.add(new BoolSetting.Builder().name("chunk-mode").description("Focus on finishing one chunk at a time.").defaultValue(true).build());
     private final Setting<Integer> eatThreshold = sgGeneral.add(new IntSetting.Builder().name("eat-threshold").description("Hunger level to start eating (4 muslitos = 8).").defaultValue(8).min(1).max(20).sliderMax(20).build());
+    private final Setting<Double> healthThreshold = sgGeneral.add(new DoubleSetting.Builder().name("health-threshold").description("Minimum life to eat (20 = full life).").defaultValue(15.0).min(1).max(20).sliderMax(20).build());
     private final Setting<List<Item>> foodItems = sgGeneral.add(new ItemListSetting.Builder().name("food-items").description("Items to eat or avoid.").build());
     private final Setting<Boolean> foodWhitelist = sgGeneral.add(new BoolSetting.Builder().name("food-whitelist").description("If enabled, only items in the list will be eaten. Otherwise, it avoids them.").defaultValue(true).build());
 
     private final Setting<Integer> maxStacks = sgLogistics.add(new IntSetting.Builder().name("reload-limit-stacks").defaultValue(12).sliderMax(27).build());
+    private final Setting<List<Item>> keepItems = sgLogistics.add(new ItemListSetting.Builder()
+        .name("keep-items")
+        .description("Items that won't be deposited into shulkers.")
+        .defaultValue(List.of(
+            Items.OBSIDIAN, Items.CRYING_OBSIDIAN,
+            Items.DIAMOND_HELMET, Items.DIAMOND_CHESTPLATE, Items.DIAMOND_LEGGINGS, Items.DIAMOND_BOOTS,
+            Items.NETHERITE_HELMET, Items.NETHERITE_CHESTPLATE, Items.NETHERITE_LEGGINGS, Items.NETHERITE_BOOTS,
+            Items.DIAMOND_SWORD, Items.DIAMOND_PICKAXE, Items.DIAMOND_AXE, Items.DIAMOND_SHOVEL, Items.DIAMOND_HOE,
+            Items.NETHERITE_SWORD, Items.NETHERITE_PICKAXE, Items.NETHERITE_AXE, Items.NETHERITE_SHOVEL, Items.NETHERITE_HOE,
+            Items.TOTEM_OF_UNDYING, Items.MACE, Items.TRIDENT, Items.ELYTRA, Items.FLINT_AND_STEEL,
+            Items.GOLDEN_APPLE, Items.ENCHANTED_GOLDEN_APPLE, Items.GOLDEN_CARROT, Items.BREAD, Items.BAKED_POTATO,
+            Items.COOKED_BEEF, Items.COOKED_PORKCHOP, Items.COOKED_CHICKEN, Items.COOKED_MUTTON, Items.COOKED_SALMON, Items.COOKED_COD
+        ))
+        .build()
+    );
 
     private final Setting<Boolean> autoDisconnect = sgSafety.add(new BoolSetting.Builder()
         .name("auto-disconnect")
-        .description("It automatically disconnects if you take damage.")
+        .description("It automatically disconnects if you pop a totem or die.")
         .defaultValue(false)
         .build()
     );
@@ -107,7 +126,6 @@ public class LogoBuilder extends Module {
     private void initReflection() {
         try {
             Class<?> swh = Class.forName("fi.dy.masa.litematica.world.SchematicWorldHandler");
-            // Try to find by name first, then by return type
             try {
                 getSchematicWorldMethod = swh.getDeclaredMethod("getSchematicWorld");
             } catch (NoSuchMethodException e) {
@@ -130,6 +148,34 @@ public class LogoBuilder extends Module {
     }
 
     @EventHandler
+    private void onReceivePacket(PacketEvent.Receive event) {
+        if (!autoDisconnect.get() || state != State.BUILDING) return;
+        if (event.packet instanceof EntityStatusS2CPacket packet) {
+            if (packet.getEntity(mc.world) == mc.player) {
+                if (packet.getStatus() == 35) {
+                    isAutoDisconnecting = true;
+                    toggle();
+                    mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Totem pop detected during construction. Disconnecting..."));
+                } else if (packet.getStatus() == 3) {
+                    isAutoDisconnecting = true;
+                    toggle();
+                    mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death detected (packet) during construction. Disconnecting..."));
+                }
+            }
+        }
+    }
+
+    @EventHandler
+    private void onOpenScreen(OpenScreenEvent event) {
+        if (!autoDisconnect.get() || state != State.BUILDING) return;
+        if (event.screen instanceof net.minecraft.client.gui.screen.DeathScreen) {
+            isAutoDisconnecting = true;
+            toggle();
+            mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death screen detected during construction. Disconnecting..."));
+        }
+    }
+
+    @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
         
@@ -137,25 +183,31 @@ public class LogoBuilder extends Module {
             mc.setScreen(null);
         }
 
-        if (autoDisconnect.get() && state == State.BUILDING && mc.player.hurtTime > 0) {
+        if (autoDisconnect.get() && state == State.BUILDING && (mc.player.getHealth() <= 0 || mc.player.isDead())) {
             isAutoDisconnecting = true;
-            mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Damage detected during construction. Disconnecting..."));
+            toggle();
+            mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death detected during construction. Disconnecting..."));
             return;
         }
 
         if (waitTicks > 0) { waitTicks--; return; }
         if (delayTimer > 0) delayTimer--;
 
-        if (state != State.EATING && mc.player.getHungerManager().getFoodLevel() <= eatThreshold.get()) {
-            FindItemResult food = InvUtils.find(this::isFoodValid);
-            if (food.found()) {
-                preEatingState = state;
-                state = State.EATING;
-                foodLevelAtStart = mc.player.getHungerManager().getFoodLevel();
-                stopBaritone();
-                oldSlotBeforeEating = mc.player.getInventory().selectedSlot;
-            }
-        }
+
+boolean lowHunger = mc.player.getHungerManager().getFoodLevel() <= eatThreshold.get();
+boolean lowHealth = mc.player.getHealth() <= healthThreshold.get();
+
+
+if (state != State.EATING && (lowHunger || lowHealth)) {
+    FindItemResult food = InvUtils.find(this::isFoodValid);
+    if (food.found()) {
+        preEatingState = state;
+        state = State.EATING;
+        foodLevelAtStart = mc.player.getHungerManager().getFoodLevel();
+        stopBaritone();
+        oldSlotBeforeEating = mc.player.getInventory().selectedSlot;
+    }
+}
 
         if (lastBaritoneGoal != null && mc.player.getVelocity().horizontalLengthSquared() < 0.0001) {
             baritoneStuckTimer++;
@@ -192,7 +244,7 @@ public class LogoBuilder extends Module {
     }
 
     private void doEating() {
-        if (mc.player.getHungerManager().getFoodLevel() > foodLevelAtStart || mc.player.getHungerManager().getFoodLevel() >= 20) {
+        if (mc.player.getHungerManager().getFoodLevel() >= 20 || (mc.player.getHealth() >= 20 && mc.player.getHungerManager().getFoodLevel() > foodLevelAtStart)) {
             mc.options.useKey.setPressed(false);
             mc.interactionManager.stopUsingItem(mc.player);
             if (oldSlotBeforeEating != -1) InvUtils.swap(oldSlotBeforeEating, false);
@@ -368,6 +420,7 @@ public class LogoBuilder extends Module {
                 if (dist <= 4.0) { stopBaritone(); state = State.OPENING; }
                 else moveTowards(activeStation, 2);
             }
+
             case OPENING -> {
                 mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, new BlockHitResult(Vec3d.ofCenter(activeStation), Direction.UP, activeStation, false));
                 state = State.RELOADING; waitTicks = 15;
@@ -380,6 +433,14 @@ public class LogoBuilder extends Module {
                         if (stack.getItem() == neededMaterial) {
                             mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
                             taken++;
+                        }
+                    }
+
+                    for (int i = 27; i < 63; i++) {
+                        ItemStack stack = mc.player.currentScreenHandler.getSlot(i).getStack();
+                        if (stack.isEmpty()) continue;
+                        if (!keepItems.get().contains(stack.getItem())) {
+                            mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
                         }
                     }
 
@@ -423,7 +484,9 @@ public class LogoBuilder extends Module {
                     }
                 }
             }
+            default -> {}
         }
+        
     }
 
     private void moveTowards(BlockPos pos, int dist) {
