@@ -1,5 +1,5 @@
 package com.example.addon.modules;
-
+ 
 import com.example.addon.GaBausSkyLogoBuilder;
 import com.example.addon.mixin.InventoryAccessor;
 import meteordevelopment.meteorclient.events.game.OpenScreenEvent;
@@ -29,28 +29,40 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
-
+ 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-
+ 
 public class LogoBuilder extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgLogistics = settings.createGroup("Logistics");
     private final SettingGroup sgSafety = settings.createGroup("Safety");
-
+ 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder().name("place-range").defaultValue(4.5).sliderMax(6).build());
     private final Setting<Integer> scanRange = sgGeneral.add(new IntSetting.Builder().name("scan-radius").defaultValue(32).min(5).sliderMax(128).build());
     private final Setting<Integer> placeDelay = sgGeneral.add(new IntSetting.Builder().name("place-delay").defaultValue(0).sliderMax(20).build());
     private final Setting<Boolean> useBaritone = sgGeneral.add(new BoolSetting.Builder().name("use-baritone").defaultValue(true).build());
     private final Setting<Boolean> airPlace = sgGeneral.add(new BoolSetting.Builder().name("air-place").description("If disabled, the bot will move to positions but won't place schematic blocks.").defaultValue(true).build());
     private final Setting<Boolean> chunkMode = sgGeneral.add(new BoolSetting.Builder().name("chunk-mode").description("Focus on finishing one chunk at a time.").defaultValue(true).build());
+    private final Setting<ChunkOrder> chunkOrder = sgGeneral.add(new EnumSetting.Builder<ChunkOrder>()
+        .name("chunk-order")
+        .description("Order in which chunks are selected.")
+        .defaultValue(ChunkOrder.CLOSEST)
+        .visible(() -> chunkMode.get())
+        .build());
+    private final Setting<LineDirection> lineDirection = sgGeneral.add(new EnumSetting.Builder<LineDirection>()
+        .name("line-direction")
+        .description("Direction to walk in straight line or snake mode.")
+        .defaultValue(LineDirection.X_POS)
+        .visible(() -> chunkMode.get() && (chunkOrder.get() == ChunkOrder.LINE || chunkOrder.get() == ChunkOrder.SNAKE))
+        .build());
     private final Setting<Integer> eatThreshold = sgGeneral.add(new IntSetting.Builder().name("eat-threshold").description("Hunger level to start eating (4 muslitos = 8).").defaultValue(8).min(1).max(20).sliderMax(20).build());
     private final Setting<Double> healthThreshold = sgGeneral.add(new DoubleSetting.Builder().name("health-threshold").description("Minimum life to eat (20 = full life).").defaultValue(15.0).min(1).max(20).sliderMax(20).build());
     private final Setting<List<Item>> foodItems = sgGeneral.add(new ItemListSetting.Builder().name("food-items").description("Items to eat or avoid.").build());
     private final Setting<Boolean> foodWhitelist = sgGeneral.add(new BoolSetting.Builder().name("food-whitelist").description("If enabled, only items in the list will be eaten. Otherwise, it avoids them.").defaultValue(true).build());
-
+ 
     private final Setting<Integer> maxStacks = sgLogistics.add(new IntSetting.Builder().name("reload-limit-stacks").defaultValue(12).sliderMax(27).build());
     private final Setting<List<Item>> keepItems = sgLogistics.add(new ItemListSetting.Builder()
         .name("keep-items")
@@ -67,18 +79,21 @@ public class LogoBuilder extends Module {
         ))
         .build()
     );
-
+ 
     private final Setting<Boolean> autoDisconnect = sgSafety.add(new BoolSetting.Builder()
         .name("auto-disconnect")
         .description("It automatically disconnects if you pop a totem or die.")
         .defaultValue(false)
         .build()
     );
-
+ 
     private enum State { BUILDING, TRAVELING, OPENING, RELOADING, PLACING_STATION, WAITING_FOR_RESTOCK, EATING }
+    private enum ChunkOrder { CLOSEST, LINE, SNAKE, SPIRAL }
+    private enum LineDirection { X_POS, X_NEG, Z_POS, Z_NEG }
+ 
     private State state = State.BUILDING;
     private State preEatingState = State.BUILDING;
-
+ 
     private final List<BlockPos> toPlace = new ArrayList<>();
     private Method getSchematicWorldMethod, getBlockStateMethod;
     private boolean reflectionSuccessNotified = false;
@@ -87,11 +102,22 @@ public class LogoBuilder extends Module {
     private BlockPos targetPos, obsidianStation, cryingStation, activeStation, lastBaritoneGoal;
     public Item neededMaterial;
     private boolean isAutoDisconnecting = false;
-
+ 
+    // Chunk traversal state
+    private BlockPos chunkOrigin = null;
+    private int lineStep = 0;
+    private int snakeRow = 0;
+    private int snakeStep = 0;
+    private int spiralWidth = 0;
+    private int spiralHeight = 0;
+    private float spiralYaw = -90.0f;
+    private boolean spiralMainPath = true;
+    private BlockPos spiralAnchor = null;
+ 
     public LogoBuilder() {
         super(GaBausSkyLogoBuilder.CATEGORY, "logo-builder", "The logo builder");
     }
-
+ 
     @Override
     public void onActivate() {
         info("LogoBuilder: Activating...");
@@ -104,12 +130,21 @@ public class LogoBuilder extends Module {
         activeChunkZ = Integer.MAX_VALUE;
         obsidianStation = null;
         cryingStation = null;
+        chunkOrigin = null;
+        lineStep = 0;
+        snakeRow = 0;
+        snakeStep = 0;
+        spiralWidth = 0;
+        spiralHeight = 0;
+        spiralYaw = -90.0f;
+        spiralMainPath = true;
+        spiralAnchor = null;
         getSchematicWorldMethod = null;
         getBlockStateMethod = null;
         reflectionSuccessNotified = false;
         initReflection();
     }
-
+ 
     @Override
     public void onDeactivate() {
         stopBaritone();
@@ -122,7 +157,7 @@ public class LogoBuilder extends Module {
         getBlockStateMethod = null;
         reflectionSuccessNotified = false;
     }
-
+ 
     private void initReflection() {
         try {
             Class<?> swh = Class.forName("fi.dy.masa.litematica.world.SchematicWorldHandler");
@@ -136,7 +171,7 @@ public class LogoBuilder extends Module {
                     }
                 }
             }
-
+ 
             if (getSchematicWorldMethod != null) {
                 getSchematicWorldMethod.setAccessible(true);
             } else {
@@ -146,7 +181,7 @@ public class LogoBuilder extends Module {
             error("Litematica reflection error: " + e.getMessage());
         }
     }
-
+ 
     @EventHandler
     private void onReceivePacket(PacketEvent.Receive event) {
         if (!autoDisconnect.get() || state != State.BUILDING) return;
@@ -164,7 +199,7 @@ public class LogoBuilder extends Module {
             }
         }
     }
-
+ 
     @EventHandler
     private void onOpenScreen(OpenScreenEvent event) {
         if (!autoDisconnect.get() || state != State.BUILDING) return;
@@ -174,7 +209,7 @@ public class LogoBuilder extends Module {
             mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death screen detected during construction. Disconnecting..."));
         }
     }
-
+ 
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
@@ -182,33 +217,31 @@ public class LogoBuilder extends Module {
         if (mc.currentScreen instanceof GameMenuScreen) {
             mc.setScreen(null);
         }
-
+ 
         if (autoDisconnect.get() && state == State.BUILDING && (mc.player.getHealth() <= 0 || mc.player.isDead())) {
             isAutoDisconnecting = true;
             toggle();
             mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death detected during construction. Disconnecting..."));
             return;
         }
-
+ 
         if (waitTicks > 0) { waitTicks--; return; }
         if (delayTimer > 0) delayTimer--;
-
-
-boolean lowHunger = mc.player.getHungerManager().getFoodLevel() <= eatThreshold.get();
-boolean lowHealth = mc.player.getHealth() <= healthThreshold.get();
-
-
-if (state != State.EATING && (lowHunger || lowHealth)) {
-    FindItemResult food = InvUtils.find(this::isFoodValid);
-    if (food.found()) {
-        preEatingState = state;
-        state = State.EATING;
-        foodLevelAtStart = mc.player.getHungerManager().getFoodLevel();
-        stopBaritone();
-        oldSlotBeforeEating = mc.player.getInventory().selectedSlot;
-    }
-}
-
+ 
+        boolean lowHunger = mc.player.getHungerManager().getFoodLevel() <= eatThreshold.get();
+        boolean lowHealth = mc.player.getHealth() <= healthThreshold.get();
+ 
+        if (state != State.EATING && (lowHunger || lowHealth)) {
+            FindItemResult food = InvUtils.find(this::isFoodValid);
+            if (food.found()) {
+                preEatingState = state;
+                state = State.EATING;
+                foodLevelAtStart = mc.player.getHungerManager().getFoodLevel();
+                stopBaritone();
+                oldSlotBeforeEating = mc.player.getInventory().selectedSlot;
+            }
+        }
+ 
         if (lastBaritoneGoal != null && mc.player.getVelocity().horizontalLengthSquared() < 0.0001) {
             baritoneStuckTimer++;
             if (baritoneStuckTimer > 40) { 
@@ -218,7 +251,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
         } else {
             baritoneStuckTimer = 0;
         }
-
+ 
         if (state == State.WAITING_FOR_RESTOCK) {
             Module restock = Modules.get().get(AutoRestock.class);
             if (restock != null && !restock.isActive()) {
@@ -227,7 +260,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             }
             return;
         }
-
+ 
         if (state == State.BUILDING) {
             if (timer % 5 == 0) doScan();
             timer++;
@@ -242,7 +275,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             doLogistics();
         }
     }
-
+ 
     private void doEating() {
         if (mc.player.getHungerManager().getFoodLevel() >= 20 || (mc.player.getHealth() >= 20 && mc.player.getHungerManager().getFoodLevel() > foodLevelAtStart)) {
             mc.options.useKey.setPressed(false);
@@ -253,28 +286,28 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             waitTicks = 5; 
             return;
         }
-
+ 
         FindItemResult food = InvUtils.find(this::isFoodValid);
         if (!food.found()) {
             state = preEatingState;
             foodLevelAtStart = -1;
             return;
         }
-
+ 
         int slot = ensureInHotbar(food);
         InvUtils.swap(slot, false);
         
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
         mc.options.useKey.setPressed(true);
     }
-
+ 
     private boolean isFoodValid(ItemStack stack) {
         if (!stack.contains(DataComponentTypes.FOOD)) return false;
         Item item = stack.getItem();
         boolean contains = foodItems.get().contains(item);
         return foodWhitelist.get() ? contains : !contains;
     }
-
+ 
     private void doScan() {
         try {
             if (getSchematicWorldMethod == null) { 
@@ -287,7 +320,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                 if (timer % 100 == 0) warning("Litematica is connected, but no schematic world is loaded.");
                 return;
             }
-
+ 
             if (getBlockStateMethod == null) {
                 for (Method m : worldSchematic.getClass().getMethods()) {
                     if (m.getParameterCount() == 1 && m.getParameterTypes()[0] == BlockPos.class && m.getReturnType() == BlockState.class) {
@@ -302,12 +335,12 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                 if (timer % 100 == 0) error("Could not find getBlockState method in Litematica's WorldSchematic.");
                 return;
             }
-
+ 
             if (!reflectionSuccessNotified) {
                 info("Litematica connected.");
                 reflectionSuccessNotified = true;
             }
-
+ 
             toPlace.clear();
             BlockPos pPos = mc.player.getBlockPos();
             int r = scanRange.get();
@@ -327,7 +360,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                     }
                 }
             }
-
+ 
             if (!toPlace.isEmpty()) {
                 if (chunkMode.get()) {
                     boolean currentChunkInScan = false;
@@ -339,7 +372,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                             }
                         }
                     }
-
+ 
                     if (activeChunkX != Integer.MAX_VALUE && !currentChunkInScan) {
                         double distToChunk = Math.sqrt(Math.pow((activeChunkX * 16 + 8) - mc.player.getX(), 2) + Math.pow((activeChunkZ * 16 + 8) - mc.player.getZ(), 2));
                         if (distToChunk < scanRange.get() - 12) {
@@ -347,19 +380,14 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                             activeChunkX = Integer.MAX_VALUE;
                         }
                     }
-
+ 
                     if (activeChunkX == Integer.MAX_VALUE) {
-                        BlockPos first = toPlace.stream()
-                            .min(Comparator.comparingDouble(p -> mc.player.getPos().distanceTo(Vec3d.ofCenter(p))))
-                            .orElse(toPlace.get(0));
-                        activeChunkX = first.getX() >> 4;
-                        activeChunkZ = first.getZ() >> 4;
-                        info("Switching to chunk: " + activeChunkX + ", " + activeChunkZ);
+                        pickNextChunk();
                     }
-
+ 
                     toPlace.removeIf(p -> (p.getX() >> 4) != activeChunkX || (p.getZ() >> 4) != activeChunkZ);
                 }
-
+ 
                 if (!toPlace.isEmpty()) {
                     toPlace.sort((a, b) -> {
                         boolean aBelow = a.getY() < mc.player.getY();
@@ -375,13 +403,146 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             if (timer % 100 == 0) error("Scan error: " + e.toString());
         }
     }
-
+ 
+    private void pickNextChunk() {
+        switch (chunkOrder.get()) {
+ 
+            case CLOSEST -> {
+                BlockPos first = toPlace.stream()
+                    .min(Comparator.comparingDouble(p -> mc.player.getPos().distanceTo(Vec3d.ofCenter(p))))
+                    .orElse(toPlace.get(0));
+                activeChunkX = first.getX() >> 4;
+                activeChunkZ = first.getZ() >> 4;
+            }
+ 
+            case LINE -> {
+                if (chunkOrigin == null) {
+                    chunkOrigin = mc.player.getBlockPos();
+                    lineStep = 0;
+                }
+                int originCX = chunkOrigin.getX() >> 4;
+                int originCZ = chunkOrigin.getZ() >> 4;
+                for (int i = lineStep; i < scanRange.get() * 2; i++) {
+                    int tx = originCX, tz = originCZ;
+                    switch (lineDirection.get()) {
+                        case X_POS -> tx = originCX + i;
+                        case X_NEG -> tx = originCX - i;
+                        case Z_POS -> tz = originCZ + i;
+                        case Z_NEG -> tz = originCZ - i;
+                    }
+                    final int ftx = tx, ftz = tz;
+                    boolean hasWork = toPlace.stream().anyMatch(p -> (p.getX() >> 4) == ftx && (p.getZ() >> 4) == ftz);
+                    if (hasWork) {
+                        activeChunkX = tx;
+                        activeChunkZ = tz;
+                        lineStep = i + 1;
+                        break;
+                    }
+                }
+            }
+ 
+            case SNAKE -> {
+                if (chunkOrigin == null) {
+                    chunkOrigin = mc.player.getBlockPos();
+                    snakeRow = 0;
+                    snakeStep = 0;
+                }
+                int originCX = chunkOrigin.getX() >> 4;
+                int originCZ = chunkOrigin.getZ() >> 4;
+                outer:
+                for (int row = snakeRow; row < scanRange.get() * 2; row++) {
+                    boolean reverse = (row % 2 == 1);
+                    int startStep = (row == snakeRow) ? snakeStep : 0;
+                    for (int step = startStep; step < scanRange.get() * 2; step++) {
+                        int tx, tz;
+                        switch (lineDirection.get()) {
+                            case X_POS -> { tx = originCX + (reverse ? -step : step); tz = originCZ + row; }
+                            case X_NEG -> { tx = originCX - (reverse ? -step : step); tz = originCZ + row; }
+                            case Z_POS -> { tz = originCZ + (reverse ? -step : step); tx = originCX + row; }
+                            case Z_NEG -> { tz = originCZ - (reverse ? -step : step); tx = originCX + row; }
+                            default    -> { tx = originCX + step; tz = originCZ + row; }
+                        }
+                        final int ftx = tx, ftz = tz;
+                        boolean hasWork = toPlace.stream().anyMatch(p -> (p.getX() >> 4) == ftx && (p.getZ() >> 4) == ftz);
+                        if (hasWork) {
+                            activeChunkX = tx;
+                            activeChunkZ = tz;
+                            snakeRow = row;
+                            snakeStep = step + 1;
+                            break outer;
+                        }
+                    }
+                    snakeStep = 0;
+                }
+            }
+ 
+            case SPIRAL -> {
+                if (spiralAnchor == null) {
+                    int startCX = mc.player.getBlockPos().getX() >> 4;
+                    int startCZ = mc.player.getBlockPos().getZ() >> 4;
+                    spiralAnchor = new BlockPos(startCX << 4, 0, startCZ << 4);
+                    chunkOrigin = spiralAnchor;
+                    spiralYaw = -90.0f;
+                    spiralMainPath = true;
+                    spiralWidth = 0;
+                    spiralHeight = 0;
+                }
+                for (int attempts = 0; attempts < 1024; attempts++) {
+                    int cx = spiralAnchor.getX() >> 4;
+                    int cz = spiralAnchor.getZ() >> 4;
+                    final int fcx = cx, fcz = cz;
+                    boolean hasWork = toPlace.stream().anyMatch(p -> (p.getX() >> 4) == fcx && (p.getZ() >> 4) == fcz);
+                    if (hasWork) {
+                        activeChunkX = cx;
+                        activeChunkZ = cz;
+                        break;
+                    }
+                    spiralAnchor = advanceSpiralAnchor();
+                }
+            }
+        }
+ 
+        if (activeChunkX != Integer.MAX_VALUE) {
+            info("Switching to chunk: " + activeChunkX + ", " + activeChunkZ);
+        }
+    }
+ 
+    private BlockPos advanceSpiralAnchor() {
+        int chunkSize = 16;
+        int ox = chunkOrigin.getX();
+        int oz = chunkOrigin.getZ();
+        int ax = spiralAnchor.getX();
+        int az = spiralAnchor.getZ();
+ 
+        if (spiralMainPath && Math.abs(ax - ox) >= (chunkSize + spiralWidth)) {
+            spiralYaw += 90.0f;
+            chunkOrigin = new BlockPos(ax, 0, oz);
+            spiralWidth += chunkSize;
+            spiralMainPath = false;
+        } else if (!spiralMainPath && Math.abs(az - oz) >= (chunkSize + spiralHeight)) {
+            spiralYaw += 90.0f;
+            chunkOrigin = new BlockPos(ox, 0, az);
+            spiralHeight += chunkSize;
+            spiralMainPath = true;
+        }
+ 
+        float yaw = spiralYaw % 360;
+        if (yaw < 0) yaw += 360;
+        int nx = ax, nz = az;
+        if      (yaw < 45 || yaw >= 315) nz -= chunkSize;
+        else if (yaw < 135)              nx += chunkSize;
+        else if (yaw < 225)              nz += chunkSize;
+        else                             nx -= chunkSize;
+ 
+        return new BlockPos(nx, 0, nz);
+    }
+ 
     private void tickBuildingLogic() {
         try {
             if (getSchematicWorldMethod == null || getBlockStateMethod == null) return;
             Object worldSchematic = getSchematicWorldMethod.invoke(null);
             if (worldSchematic == null) { targetPos = null; return; }
-
+ 
             BlockState required = (BlockState) getBlockStateMethod.invoke(worldSchematic, targetPos);
             if (required == null || required.isAir()) { targetPos = null; return; }
             
@@ -395,7 +556,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                         ? State.PLACING_STATION : State.TRAVELING;
                 return;
             }
-
+ 
             double dist = mc.player.getPos().distanceTo(Vec3d.ofCenter(targetPos));
             if (dist <= range.get()) {
                 stopBaritone();
@@ -412,7 +573,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             if (timer % 100 == 0) error("Building logic error: " + e.toString());
         }
     }
-
+ 
     private void doLogistics() {
         switch (state) {
             case TRAVELING -> {
@@ -420,7 +581,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                 if (dist <= 4.0) { stopBaritone(); state = State.OPENING; }
                 else moveTowards(activeStation, 2);
             }
-
+ 
             case OPENING -> {
                 mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, new BlockHitResult(Vec3d.ofCenter(activeStation), Direction.UP, activeStation, false));
                 state = State.RELOADING; waitTicks = 15;
@@ -435,7 +596,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                             taken++;
                         }
                     }
-
+ 
                     for (int i = 27; i < 63; i++) {
                         ItemStack stack = mc.player.currentScreenHandler.getSlot(i).getStack();
                         if (stack.isEmpty()) continue;
@@ -443,7 +604,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                             mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
                         }
                     }
-
+ 
                     boolean remaining = false;
                     for (int i = 0; i < 27; i++) {
                         if (mc.player.currentScreenHandler.getSlot(i).getStack().getItem() == neededMaterial) {
@@ -451,7 +612,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                             break;
                         }
                     }
-
+ 
                     mc.player.closeHandledScreen();
                     
                     if (!remaining) {
@@ -486,9 +647,8 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             }
             default -> {}
         }
-        
     }
-
+ 
     private void moveTowards(BlockPos pos, int dist) {
         if (useBaritone.get()) {
             if (pos.equals(lastBaritoneGoal)) return;
@@ -507,7 +667,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             } catch (Exception e) { manualMove(pos); }
         } else manualMove(pos);
     }
-
+ 
     private void stopBaritone() {
         if (lastBaritoneGoal == null) return;
         try {
@@ -519,7 +679,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             lastBaritoneGoal = null;
         } catch (Exception ignored) {}
     }
-
+ 
     private void manualMove(BlockPos pos) {
         Vec3d target = Vec3d.ofCenter(pos);
         Vec3d pPos = mc.player.getPos();
@@ -528,7 +688,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
         mc.options.forwardKey.setPressed(true);
         if (target.y > pPos.y + 1 && mc.player.isOnGround()) mc.player.jump();
     }
-
+ 
     private BlockPos findPlacementPos() {
         BlockPos center = mc.player.getBlockPos().down(2);
         if (isValidPlacement(center)) return center;
@@ -540,19 +700,19 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
         }
         return null;
     }
-
+ 
     private boolean isValidPlacement(BlockPos pos) {
         return mc.world.getBlockState(pos).isReplaceable() && 
                !mc.world.getBlockState(pos.up()).isReplaceable() && 
                mc.player.getPos().distanceTo(Vec3d.ofCenter(pos)) <= range.get();
     }
-
+ 
     private int ensureInHotbar(FindItemResult result) {
         if (result.isHotbar()) return result.slot();
         InvUtils.move().from(result.slot()).toHotbar(mc.player.getInventory().selectedSlot);
         return mc.player.getInventory().selectedSlot;
     }
-
+ 
     private boolean placeBlock(BlockPos pos, Item item) {
         FindItemResult result = InvUtils.find(item);
         if (!result.found()) return false;
@@ -563,7 +723,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
         InvUtils.swap(oldSlot, false);
         return ok;
     }
-
+ 
     private int countItem(Item item) {
         int count = 0;
         for (int i = 0; i < 36; i++) {
@@ -572,7 +732,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
         }
         return count;
     }
-
+ 
     private FindItemResult findShulkerWith(Item material) {
         return InvUtils.find(stack -> {
             if (!(stack.getItem() instanceof BlockItem && ((BlockItem) stack.getItem()).getBlock() instanceof ShulkerBoxBlock)) return false;
