@@ -41,7 +41,7 @@ public class LogoBuilder extends Module {
     private final SettingGroup sgSafety = settings.createGroup("Safety");
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder().name("place-range").defaultValue(4.5).sliderMax(6).build());
-    private final Setting<Integer> scanRange = sgGeneral.add(new IntSetting.Builder().name("scan-radius").defaultValue(32).min(5).sliderMax(128).build());
+    private final Setting<Integer> scanRange = sgGeneral.add(new IntSetting.Builder().name("scan-radius").defaultValue(32).min(5).sliderMax(512).build());
     private final Setting<Integer> placeDelay = sgGeneral.add(new IntSetting.Builder().name("place-delay").defaultValue(0).sliderMax(20).build());
     private final Setting<Boolean> useBaritone = sgGeneral.add(new BoolSetting.Builder().name("use-baritone").defaultValue(true).build());
     private final Setting<Boolean> airPlace = sgGeneral.add(new BoolSetting.Builder().name("air-place").description("If disabled, the bot will move to positions but won't place schematic blocks.").defaultValue(true).build());
@@ -50,6 +50,7 @@ public class LogoBuilder extends Module {
     private final Setting<Double> healthThreshold = sgGeneral.add(new DoubleSetting.Builder().name("health-threshold").description("Minimum life to eat (20 = full life).").defaultValue(15.0).min(1).max(20).sliderMax(20).build());
     private final Setting<List<Item>> foodItems = sgGeneral.add(new ItemListSetting.Builder().name("food-items").description("Items to eat or avoid.").build());
     private final Setting<Boolean> foodWhitelist = sgGeneral.add(new BoolSetting.Builder().name("food-whitelist").description("If enabled, only items in the list will be eaten. Otherwise, it avoids them.").defaultValue(true).build());
+    private final Setting<Boolean> searchFarChunks = sgGeneral.add(new BoolSetting.Builder().name("search-far-chunks").description("If no blocks are found, move straight with Baritone to find new chunks.").defaultValue(false).build());
 
     private final Setting<Integer> maxStacks = sgLogistics.add(new IntSetting.Builder().name("reload-limit-stacks").defaultValue(12).sliderMax(27).build());
     private final Setting<List<Item>> keepItems = sgLogistics.add(new ItemListSetting.Builder()
@@ -84,6 +85,7 @@ public class LogoBuilder extends Module {
     private boolean reflectionSuccessNotified = false;
     private int timer = 0, delayTimer = 0, waitTicks = 0, baritoneStuckTimer = 0, oldSlotBeforeEating = -1, foodLevelAtStart = -1;
     private int activeChunkX = Integer.MAX_VALUE, activeChunkZ = Integer.MAX_VALUE;
+    private float searchYaw = -1;
     private BlockPos targetPos, obsidianStation, cryingStation, activeStation, lastBaritoneGoal;
     public Item neededMaterial;
     private boolean isAutoDisconnecting = false;
@@ -102,6 +104,7 @@ public class LogoBuilder extends Module {
         isAutoDisconnecting = false;
         activeChunkX = Integer.MAX_VALUE;
         activeChunkZ = Integer.MAX_VALUE;
+        searchYaw = -1;
         obsidianStation = null;
         cryingStation = null;
         getSchematicWorldMethod = null;
@@ -219,13 +222,19 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             baritoneStuckTimer = 0;
         }
 
-        if (state == State.WAITING_FOR_RESTOCK) {
-            Module restock = Modules.get().get(AutoRestock.class);
-            if (restock != null && !restock.isActive()) {
-                state = State.BUILDING;
-                info("AutoRestock finished.");
+        if (lastBaritoneGoal != null && targetPos == null && state == State.BUILDING && searchFarChunks.get()) {
+            if (mc.player.getPos().distanceTo(Vec3d.ofCenter(lastBaritoneGoal)) < 1.2) {
+                lastBaritoneGoal = null;
             }
-            return;
+            baritoneStuckTimer++;
+            if (baritoneStuckTimer > 40) {
+                stopBaritone();
+                lastBaritoneGoal = null;
+                baritoneStuckTimer = 0;
+                searchYaw += 90;
+            }
+        } else {
+            baritoneStuckTimer = 0;
         }
 
         if (state == State.BUILDING) {
@@ -311,8 +320,9 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             toPlace.clear();
             BlockPos pPos = mc.player.getBlockPos();
             int r = scanRange.get();
+            
             for (int x = -r; x <= r; x++) {
-                for (int y = -r; y <= r; y++) {
+                for (int y = -1; y <= 1; y++) {
                     for (int z = -r; z <= r; z++) {
                         BlockPos pos = pPos.add(x, y, z);
                         BlockState req = (BlockState) getBlockStateMethod.invoke(worldSchematic, pos);
@@ -350,7 +360,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
 
                     if (activeChunkX == Integer.MAX_VALUE) {
                         BlockPos first = toPlace.stream()
-                            .min(Comparator.comparingDouble(p -> mc.player.getPos().distanceTo(Vec3d.ofCenter(p))))
+                            .min(Comparator.comparingDouble(p -> mc.player.squaredDistanceTo(p.getX() + 0.5, p.getY() + 0.5, p.getZ() + 0.5)))
                             .orElse(toPlace.get(0));
                         activeChunkX = first.getX() >> 4;
                         activeChunkZ = first.getZ() >> 4;
@@ -366,14 +376,90 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                         boolean bBelow = b.getY() < mc.player.getY();
                         if (aBelow && !bBelow) return -1;
                         if (!aBelow && bBelow) return 1;
-                        return Double.compare(mc.player.getPos().distanceTo(Vec3d.ofCenter(a)), mc.player.getPos().distanceTo(Vec3d.ofCenter(b)));
+                        double distSqA = mc.player.squaredDistanceTo(a.getX() + 0.5, a.getY() + 0.5, a.getZ() + 0.5);
+                        double distSqB = mc.player.squaredDistanceTo(b.getX() + 0.5, b.getY() + 0.5, b.getZ() + 0.5);
+                        return Double.compare(distSqA, distSqB);
                     });
                     targetPos = toPlace.get(0);
-                } else targetPos = null;
-            } else targetPos = null;
+                } else {
+                    targetPos = null;
+                    if (searchFarChunks.get()) {
+                        activeChunkX = Integer.MAX_VALUE;
+                        moveStraight();
+                    }
+                }
+            } else {
+                targetPos = null;
+                if (searchFarChunks.get()) {
+                    activeChunkX = Integer.MAX_VALUE;
+                    moveStraight();
+                }
+            }
         } catch (Exception e) {
             if (timer % 100 == 0) error("Scan error: " + e.toString());
         }
+    }
+
+    private void moveStraight() {
+        if (lastBaritoneGoal != null) return;
+
+        try {
+            Object worldSchematic = getSchematicWorldMethod.invoke(null);
+            if (worldSchematic == null) return;
+
+            if (searchYaw == -1) searchYaw = (float) (Math.round(mc.player.getYaw() / 90.0) * 90.0);
+
+            if (isImmediateAreaEmpty(worldSchematic, searchYaw)) {
+                searchYaw += 90;
+                return;
+            }
+
+            double rad = Math.toRadians(searchYaw);
+            double dx = -Math.sin(rad) * 2.0;
+            double dz = Math.cos(rad) * 2.0;
+            BlockPos blindGoal = mc.player.getBlockPos().add((int) Math.round(dx), 0, (int) Math.round(dz));
+            
+            if (hasAnyBlockInColumn(worldSchematic, blindGoal)) {
+                moveTowards(blindGoal, 0);
+            } else {
+                searchYaw += 90;
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private boolean isImmediateAreaEmpty(Object worldSchematic, float yaw) throws Exception {
+        double rad = Math.toRadians(yaw);
+        double dx = -Math.sin(rad);
+        double dz = Math.cos(rad);
+        BlockPos pPos = mc.player.getBlockPos();
+
+        for (int i = 1; i <= 2; i++) {
+            BlockPos checkPos = pPos.add((int) (dx * i), 0, (int) (dz * i));
+            if (hasAnyBlockInColumn(worldSchematic, checkPos)) return false;
+        }
+        return true;
+    }
+
+    private boolean hasAnyBlockInColumn(Object worldSchematic, BlockPos pos) throws Exception {
+        for (int y = -10; y <= 10; y++) {
+            BlockState state = (BlockState) getBlockStateMethod.invoke(worldSchematic, pos.up(y));
+            if (state != null && !state.isAir()) return true;
+        }
+        return false;
+    }
+
+    private int getDistanceToNearestBlock(Object worldSchematic, float yaw) throws Exception {
+        double rad = Math.toRadians(yaw);
+        double dx = -Math.sin(rad);
+        double dz = Math.cos(rad);
+        BlockPos pPos = mc.player.getBlockPos();
+
+        for (int i = 1; i <= 64; i++) {
+            BlockPos checkPos = pPos.add((int) (dx * i), 0, (int) (dz * i));
+            if (hasAnyBlockInColumn(worldSchematic, checkPos)) return i;
+            if (getBlockStateMethod.invoke(worldSchematic, checkPos) == null) return -1;
+        }
+        return -1;
     }
 
     private void tickBuildingLogic() {
