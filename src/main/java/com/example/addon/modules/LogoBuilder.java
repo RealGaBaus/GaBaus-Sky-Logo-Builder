@@ -237,6 +237,15 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             baritoneStuckTimer = 0;
         }
 
+    if (state == State.WAITING_FOR_RESTOCK) {
+        Module restock = Modules.get().get(AutoRestock.class);
+        if (restock != null && !restock.isActive()) {
+            state = State.BUILDING;
+            info("AutoRestock finished. Returning to construction.");
+        }
+         return;
+        }
+
         if (state == State.BUILDING) {
             if (timer % 5 == 0) doScan();
             timer++;
