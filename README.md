@@ -13,6 +13,7 @@ Addon for Meteor Client that automatically builds logos/mapart from schematics w
   <img src="https://img.shields.io/github/forks/RealGaBaus/GaBaus-Sky-Logo-Builder">
   <img src="https://img.shields.io/github/issues/RealGaBaus/GaBaus-Sky-Logo-Builder">
   <img src="https://img.shields.io/github/last-commit/RealGaBaus/GaBaus-Sky-Logo-Builder">
+  <img src="https://img.shields.io/github/downloads/RealGaBaus/GaBaus-Sky-Logo-Builder/total">
 </p>
 
 </div>
