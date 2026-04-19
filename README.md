@@ -1,53 +1,93 @@
-# GaBaus Sky-logo Builder (For minecraft 1.21.1)
-#### Make an issue or DM me on discord `bautti_.` with any questions (Check the FAQ first)
-#### Pull Requests are welcome.
+<div align="center">
 
-**Currently works on 8b8t, and 6b6t kitbots.**
+<img src="https://raw.githubusercontent.com/RealGaBaus/GaBaus-Sky-Logo-Builder/main/src/main/resources/assets/nerv/icon.png" width="20%"/>
 
-## Features
+# GaBaus Sky Logo Builder
+
+<p>
+Addon for Meteor Client that automatically builds logos/mapart from schematics with high reliability and anti-cheat compatibility.
+</p>
+
+<p>
+  <img src="https://img.shields.io/github/stars/RealGaBaus/GaBaus-Sky-Logo-Builder">
+  <img src="https://img.shields.io/github/forks/RealGaBaus/GaBaus-Sky-Logo-Builder">
+  <img src="https://img.shields.io/github/issues/RealGaBaus/GaBaus-Sky-Logo-Builder">
+  <img src="https://img.shields.io/github/last-commit/RealGaBaus/GaBaus-Sky-Logo-Builder">
+</p>
+
+</div>
+
+---
+
+#### Make an issue or DM me on Discord `bautti_.` with any questions (check FAQ first)  
+#### Pull Requests are welcome  
+
+**Currently works on 8b8t and 6b6t kitbots.**
+
+---
+
+## ✨ Features
+
 ### Modules
+
 - **LogoBuilder**
-  - The core module for building logos using Litematica schematics.
-  - Supports automatic material management, Baritone integration, and hunger management.
-  - Focuses on finishing one chunk at a time for efficiency.
+  - Core module for building logos using Litematica schematics  
+  - Automatic material management  
+  - Baritone integration  
+  - Hunger management  
+  - Chunk-by-chunk optimized building  
 
 - **AutoRestock (Advanced)**
   - Dual-mode restocker:
-    - **Base Guardian Mode**: Standard stasis restocker. Handles pearl throwing, TP detection, and looting designated chests (Obsidian/Crying Obsidian).
-    - **Kitbot Mode**: Modern restock via commands. 
-      - **Safe Chunk Search**: Automatically finds a nearby 16x16 solid chunk to stand on before requesting the kit.
-      - **Custom Commands**: Configurable command (e.g., `$kit obsidian 1`).
-      - **Smart Timing**: Customizable delay (in minutes) and option to repeat the message until a new shulker is detected in the inventory.
 
-- **Logo Breaker Beta**
-  - Efficiently breaks logos.
-  - Supports chunk-based operation and feet protection to avoid falling.
-  - Filterable by block type (Obsidian/Crying Obsidian).
+  **Base Guardian Mode**
+  - Stasis restock system  
+  - Handles pearl throwing and TP detection  
+  - Loots designated chests (Obsidian / Crying Obsidian)
+
+  **Kitbot Mode**
+  - Command-based restock  
+  - Safe chunk finder (16x16 solid area)  
+  - Custom commands (example: `$kit obsidian 1`)  
+  - Smart delay + repeat until shulker detected  
+
+- **Logo Breaker (Beta)**
+  - Efficient logo breaking  
+  - Chunk-based operation  
+  - Feet protection  
+  - Block filtering (Obsidian / Crying Obsidian)
 
 - **BaseGuardian**
-  - Automated button interaction system.
-  - Can be used for remote restock triggers and Anti-AFK movements.
+  - Automated button interaction  
+  - Remote restock trigger  
+  - Anti-AFK movement  
 
-## Installation & Setup
+---
+
+## ⚙️ Installation & Setup
+
 To use the addon correctly, it is recommended to use the provided schematic:
-1. Go to the `extras/` folder in this repository.
-2. Download `Stasis Chamber x10.litematic`.
-3. Place the `.litematic` file in your `.minecraft/schematics` folder.
-4. Use Litematica to load the schematic in-game.
 
-### Schematic Previews
-**Outside View:**
+1. Go to `extras/` folder  
+2. Download `Stasis Chamber x10.litematic`  
+3. Put it in `.minecraft/schematics`  
+4. Load it using Litematica  
+
+---
+
+## 🖼️ Schematic Preview
+
+### Outside
 ![Outside](extras/Stasis%20Chamber%20x10%20(1).png)
 
-**Inside View:**
+### Inside
 ![Inside](extras/Stasis%20Chamber%20x10%20(2).png)
 
-## FAQ
-- Q: How do I install this / where is the jar file?
-  - A: You can build the JAR using `./gradlew build` or download the latest release.
-- Q: Why isn't mod x showing up?
-  - A: Make sure you have the required dependencies. It is recommended to have [Meteor Client](https://meteorclient.com/), [Baritone](https://github.com/cabaletta/baritone), and [Litematica](https://www.curseforge.com/minecraft/mc-mods/litematica) installed.
-- Q: Why is my game crashing?
-  - A: Please make an issue or DM me the crash report found in .minecraft/crash-reports.
+---
 
-# [Meteor Client Snapshots](https://maven.meteordev.org/#/snapshots/meteordevelopment/)
+## ❓ FAQ
+
+- **How do I install / where is the jar?**  
+  Build with:
+  ```bash
+  ./gradlew build
