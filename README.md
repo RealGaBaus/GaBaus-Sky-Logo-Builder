@@ -1,94 +1,85 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/RealGaBaus/GaBaus-Sky-Logo-Builder/master/src/main/resources/assets/template/icon.png" width="20%"/>
+<!-- Logo and Title -->
+<img src="https://raw.githubusercontent.com/RealGaBaus/GaBaus-Sky-Logo-Builder/master/src/main/resources/assets/template/icon.png" alt="logo" width="20%"/>
 
-# GaBaus Sky Logo Builder
-
-<p>
-Addon for Meteor Client that automatically builds logos/mapart from schematics with high reliability and anti-cheat compatibility.
-</p>
+<h1>GaBaus Sky-logo Builder</h1>
 
 <p>
-  <img src="https://img.shields.io/github/stars/RealGaBaus/GaBaus-Sky-Logo-Builder">
-  <img src="https://img.shields.io/github/forks/RealGaBaus/GaBaus-Sky-Logo-Builder">
-  <img src="https://img.shields.io/github/issues/RealGaBaus/GaBaus-Sky-Logo-Builder">
-  <img src="https://img.shields.io/github/last-commit/RealGaBaus/GaBaus-Sky-Logo-Builder">
-  <img src="https://img.shields.io/github/downloads/RealGaBaus/GaBaus-Sky-Logo-Builder/total">
+GaBaus Sky-logo Builder is an addon for the Meteor Client that allows you to automatically build logos/mapart from schematics. It focuses on reliability and compatibility with strict anti-cheat servers.
 </p>
+
+<!-- Shields -->
+[![Release](https://img.shields.io/github/v/release/RealGaBaus/GaBaus-Sky-Logo-Builder)](https://github.com/RealGaBaus/GaBaus-Sky-Logo-Builder/releases)
+[![Last Commit](https://img.shields.io/github/last-commit/RealGaBaus/GaBaus-Sky-Logo-Builder)](https://github.com/RealGaBaus/GaBaus-Sky-Logo-Builder/commits)
+[![Issues](https://img.shields.io/github/issues/RealGaBaus/GaBaus-Sky-Logo-Builder)](https://github.com/RealGaBaus/GaBaus-Sky-Logo-Builder/issues)
+[![Downloads](https://img.shields.io/github/downloads/RealGaBaus/GaBaus-Sky-Logo-Builder/total)](https://github.com/RealGaBaus/GaBaus-Sky-Logo-Builder/releases)
+[![Stars](https://img.shields.io/github/stars/RealGaBaus/GaBaus-Sky-Logo-Builder)](https://github.com/RealGaBaus/GaBaus-Sky-Logo-Builder/stargazers)
 
 </div>
 
----
+# GaBaus Sky-logo Builder (For minecraft 1.21.1)
 
-#### Make an issue or DM me on Discord `bautti_.` with any questions (check FAQ first)  
-#### Pull Requests are welcome  
+#### Make an issue or DM me on discord `bautti_.` with any questions (Check the FAQ first)  
 
-**Currently works on 8b8t and 6b6t kitbots.**
-
----
+**Currently works on 8b8t, and 6b6t kitbots.**
 
 ## Features
 
 ### Modules
 
 - **LogoBuilder**
-  - Core module for building logos using Litematica schematics  
-  - Automatic material management  
-  - Baritone integration  
-  - Hunger management  
-  - Chunk-by-chunk optimized building  
+  - The core module for building logos using Litematica schematics.
+  - Supports automatic material management, Baritone integration, and hunger management.
+  - Focuses on finishing one chunk at a time for efficiency.
 
 - **AutoRestock (Advanced)**
   - Dual-mode restocker:
 
-  **Base Guardian Mode**
-  - Stasis restock system  
-  - Handles pearl throwing and TP detection  
-  - Loots designated chests (Obsidian / Crying Obsidian)
+  - **Base Guardian Mode**
+    - Standard stasis restocker. Handles pearl throwing, TP detection, and looting designated chests (Obsidian/Crying Obsidian).
 
-  **Kitbot Mode**
-  - Command-based restock  
-  - Safe chunk finder (16x16 solid area)  
-  - Custom commands (example: `$kit obsidian 1`)  
-  - Smart delay + repeat until shulker detected  
+  - **Kitbot Mode**
+    - Modern restock via commands.
+    - **Safe Chunk Search**: Automatically finds a nearby 16x16 solid chunk.
+    - **Custom Commands**: (e.g., `$kit obsidian 1`)
+    - **Smart Timing**: Delay + repeat until shulker detected.
 
-- **Logo Breaker (Beta)**
-  - Efficient logo breaking  
-  - Chunk-based operation  
-  - Feet protection  
-  - Block filtering (Obsidian / Crying Obsidian)
+- **Logo Breaker Beta**
+  - Efficiently breaks logos.
+  - Chunk-based operation and feet protection.
+  - Filterable by block type.
 
 - **BaseGuardian**
-  - Automated button interaction  
-  - Remote restock trigger  
-  - Anti-AFK movement  
-
----
+  - Automated button interaction system.
+  - Remote restock trigger and Anti-AFK.
 
 ## Installation & Setup
 
-To use the addon correctly, it is recommended to use the provided schematic:
+To use the addon correctly:
 
-1. Go to `extras/` folder  
+1. Go to the `extras/` folder  
 2. Download `Stasis Chamber x10.litematic`  
-3. Put it in `.minecraft/schematics`  
+3. Place it in `.minecraft/schematics`  
 4. Load it using Litematica  
 
----
+### Schematic Previews
 
-## Schematic Preview
-
-### Outside
+**Outside View:**  
 ![Outside](extras/Stasis%20Chamber%20x10%20(1).png)
 
-### Inside
+**Inside View:**  
 ![Inside](extras/Stasis%20Chamber%20x10%20(2).png)
 
----
+## FAQ
 
-## ❓ FAQ
+- Q: How do I install this / where is the jar file?  
+  - A: Build with `./gradlew build` or download the latest release.
 
-- **How do I install / where is the jar?**  
-  Build with:
-  ```bash
-  ./gradlew build
+- Q: Why isn't mod x showing up?  
+  - A: Make sure you have Meteor Client, Baritone, and Litematica installed.
+
+- Q: Why is my game crashing?  
+  - A: Send the crash report from `.minecraft/crash-reports`.
+
+# [Meteor Client Snapshots](https://maven.meteordev.org/#/snapshots/meteordevelopment/)
