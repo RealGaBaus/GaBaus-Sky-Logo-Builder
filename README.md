@@ -27,7 +27,7 @@ Addon for Meteor Client that automatically builds logos/mapart from schematics w
 
 ---
 
-## ✨ Features
+## Features
 
 ### Modules
 
@@ -65,7 +65,7 @@ Addon for Meteor Client that automatically builds logos/mapart from schematics w
 
 ---
 
-## ⚙️ Installation & Setup
+## Installation & Setup
 
 To use the addon correctly, it is recommended to use the provided schematic:
 
@@ -76,7 +76,7 @@ To use the addon correctly, it is recommended to use the provided schematic:
 
 ---
 
-## 🖼️ Schematic Preview
+## Schematic Preview
 
 ### Outside
 ![Outside](extras/Stasis%20Chamber%20x10%20(1).png)
