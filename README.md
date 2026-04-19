@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/RealGaBaus/GaBaus-Sky-Logo-Builder/main/src/main/resources/assets/nerv/icon.png" width="20%"/>
+<img src="https://raw.githubusercontent.com/RealGaBaus/GaBaus-Sky-Logo-Builder/main/src/main/resources/assets/template/icon.png" width="20%"/>
 
 # GaBaus Sky Logo Builder
 
