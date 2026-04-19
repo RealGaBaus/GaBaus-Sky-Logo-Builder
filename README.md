@@ -11,11 +11,11 @@ GaBaus Sky-logo Builder is an addon for the Meteor Client that allows you to aut
 
 <p>
   <img src="https://img.shields.io/github/v/release/RealGaBaus/GaBaus-Sky-Logo-Builder">
+  <img src="https://img.shields.io/github/downloads/RealGaBaus/GaBaus-Sky-Logo-Builder/total">
   <img src="https://img.shields.io/github/stars/RealGaBaus/GaBaus-Sky-Logo-Builder">
   <img src="https://img.shields.io/github/forks/RealGaBaus/GaBaus-Sky-Logo-Builder">
-  <img src="https://img.shields.io/github/issues/RealGaBaus/GaBaus-Sky-Logo-Builder">
   <img src="https://img.shields.io/github/last-commit/RealGaBaus/GaBaus-Sky-Logo-Builder">
-  <img src="https://img.shields.io/github/downloads/RealGaBaus/GaBaus-Sky-Logo-Builder/total">
+  <img src="https://img.shields.io/github/issues/RealGaBaus/GaBaus-Sky-Logo-Builder">
 </p>
 
 </div>
