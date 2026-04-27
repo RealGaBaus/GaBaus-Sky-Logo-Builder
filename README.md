@@ -6,12 +6,12 @@
 <h1>GaBaus Sky-logo Builder</h1>
 
 <p>
-GaBaus Sky-logo Builder is an addon for the Meteor Client that allows you to automatically build logos/mapart from schematics. It focuses on reliability and compatibility with strict anti-cheat servers.
+GaBaus Sky-logo Builder is an addon for the Meteor Client that allows you to automatically build sky-logos from schematics.
 </p>
 
 <p>
   <img src="https://img.shields.io/github/v/release/RealGaBaus/GaBaus-Sky-Logo-Builder">
-  <img src="https://img.shields.io/github/downloads/RealGaBaus/GaBaus-Sky-Logo-Builder/total">
+  <img src="https://img.shields.io/github/downloads/RealGaBaus/GaBaus-Sky-Logo-Builder/total?cacheSeconds=60">
   <img src="https://img.shields.io/github/stars/RealGaBaus/GaBaus-Sky-Logo-Builder">
   <img src="https://img.shields.io/github/forks/RealGaBaus/GaBaus-Sky-Logo-Builder">
   <img src="https://img.shields.io/github/last-commit/RealGaBaus/GaBaus-Sky-Logo-Builder">
