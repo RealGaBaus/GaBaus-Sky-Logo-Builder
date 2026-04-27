@@ -56,7 +56,7 @@ GaBaus Sky-logo Builder is an addon for the Meteor Client that allows you to aut
   - Automated button interaction system.
   - Remote restock trigger and Anti-AFK.
 
-## Installation & Setup
+## Installation & Setup (8b8t)
 
 To use the addon correctly:
 
