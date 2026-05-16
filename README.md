@@ -47,10 +47,11 @@ GaBaus Sky-logo Builder is an addon for the Meteor Client that allows you to aut
     - **Custom Commands**: (e.g., `$kit obsidian 1`)
     - **Smart Timing**: Delay + repeat until shulker detected.
 
-- **Logo Breaker Beta**
-  - Efficiently breaks logos.
-  - Chunk-based operation and feet protection.
-  - Filterable by block type.
+- **Logo Breaker**
+  - Breaks logos or wrong schematic blocks.
+  - Chunk-based snake pattern.
+  - Litematica mode: removes extra blocks, wrong types, and unwanted air.
+  - Block filter support.
 
 - **BaseGuardian**
   - Automated button interaction system.
