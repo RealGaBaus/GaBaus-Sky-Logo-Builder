@@ -1,6 +1,8 @@
 package com.example.addon.modules;
 
 import com.example.addon.GaBausSkyLogoBuilder;
+import meteordevelopment.meteorclient.events.game.OpenScreenEvent;
+import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
@@ -11,7 +13,12 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.component.DataComponentTypes;
+import net.minecraft.entity.mob.MobEntity;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.item.PickaxeItem;
+import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -25,6 +32,7 @@ public class LogoBreaker extends Module {
     private final SettingGroup sgGeneral    = settings.getDefaultGroup();
     private final SettingGroup sgLitematica = settings.createGroup("Litematica");
     private final SettingGroup sgMovement   = settings.createGroup("Movement");
+    private final SettingGroup sgSafety     = settings.createGroup("Safety");
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
         .name("break-range").defaultValue(4.5).sliderMax(6).build());
@@ -37,6 +45,31 @@ public class LogoBreaker extends Module {
         .description("Blocks to break in normal mode.")
         .defaultValue(List.of(Blocks.OBSIDIAN, Blocks.CRYING_OBSIDIAN))
         .build());
+
+    private final Setting<Integer> eatThreshold = sgGeneral.add(new IntSetting.Builder()
+        .name("eat-threshold")
+        .description("Hunger level to start eating (4 muslitos = 8).")
+        .defaultValue(8).min(1).max(20).sliderMax(20).build());
+
+    private final Setting<Double> healthThreshold = sgGeneral.add(new DoubleSetting.Builder()
+        .name("health-threshold")
+        .description("Minimum health to eat (20 = full health).")
+        .defaultValue(15.0).min(1).max(20).sliderMax(20).build());
+
+    private final Setting<List<Item>> foodItems = sgGeneral.add(new ItemListSetting.Builder()
+        .name("food-items")
+        .description("Items to eat or avoid.")
+        .build());
+
+    private final Setting<Boolean> foodWhitelist = sgGeneral.add(new BoolSetting.Builder()
+        .name("food-whitelist")
+        .description("If enabled, only items in the list will be eaten. Otherwise, it avoids them.")
+        .defaultValue(true).build());
+
+    private final Setting<Boolean> searchFarChunks = sgGeneral.add(new BoolSetting.Builder()
+        .name("search-far-chunks")
+        .description("If no blocks are found, move straight with Baritone to find new chunks.")
+        .defaultValue(false).build());
 
     private final Setting<Boolean> litematicaMode = sgLitematica.add(new BoolSetting.Builder()
         .name("litematica-mode")
@@ -66,10 +99,30 @@ public class LogoBreaker extends Module {
         .name("chunk-mode").description("Focus on one chunk at a time.")
         .defaultValue(true).build());
 
+    private final Setting<Boolean> autoDisconnect = sgSafety.add(new BoolSetting.Builder()
+        .name("auto-disconnect")
+        .description("Automatically disconnects if you pop a totem or die.")
+        .defaultValue(false)
+        .build());
+
+    private final Setting<Boolean> pauseOnMob = sgSafety.add(new BoolSetting.Builder()
+        .name("pause-on-mob")
+        .description("Pause breaking when a mob is within 4 blocks on X/Z. Let KillAura handle it.")
+        .defaultValue(true)
+        .build());
+
     private static final boolean USE_BARITONE  = true;
     private static final int     STUCK_TICKS   = 80;
     private static final double  STUCK_DIST_SQ = 0.05 * 0.05;
     private static final int     GOAL_COOLDOWN = 40;
+
+    private enum State { BREAKING, EATING }
+    private State state       = State.BREAKING;
+    private State preEatState = State.BREAKING;
+
+    private int     oldSlotBeforeEating = -1;
+    private int     foodLevelAtStart    = -1;
+    private boolean isAutoDisconnecting = false;
 
     private Method  getSchematicWorldMethod = null;
     private Method  getBlockStateMethod     = null;
@@ -90,7 +143,8 @@ public class LogoBreaker extends Module {
     private int      baritoneFailCount  = 0;
     private int      baritoneRetryDelay = 0;
 
-    private int timer = 0;
+    private float searchYaw = -1;
+    private int   timer     = 0;
 
     public LogoBreaker() {
         super(GaBausSkyLogoBuilder.CATEGORY, "logo-breaker", "Logo Breaker");
@@ -108,6 +162,9 @@ public class LogoBreaker extends Module {
         goalChangeCooldown = 0;
         activeChunkX = activeChunkZ = Integer.MAX_VALUE;
         timer = 0;
+        state = State.BREAKING;
+        isAutoDisconnecting = false;
+        searchYaw = -1;
         initLitematicaReflection();
     }
 
@@ -115,6 +172,131 @@ public class LogoBreaker extends Module {
     public void onDeactivate() {
         stopBaritone();
         mc.options.forwardKey.setPressed(false);
+    }
+
+    @EventHandler
+    private void onReceivePacket(PacketEvent.Receive event) {
+        if (!autoDisconnect.get()) return;
+        if (event.packet instanceof EntityStatusS2CPacket packet) {
+            if (packet.getEntity(mc.world) == mc.player) {
+                if (packet.getStatus() == 35) {
+                    isAutoDisconnecting = true;
+                    toggle();
+                    mc.player.networkHandler.getConnection().disconnect(
+                        net.minecraft.text.Text.literal("[LogoBreaker] Totem pop detected. Disconnecting..."));
+                } else if (packet.getStatus() == 3) {
+                    isAutoDisconnecting = true;
+                    toggle();
+                    mc.player.networkHandler.getConnection().disconnect(
+                        net.minecraft.text.Text.literal("[LogoBreaker] Death detected (packet). Disconnecting..."));
+                }
+            }
+        }
+    }
+
+    @EventHandler
+    private void onOpenScreen(OpenScreenEvent event) {
+        if (!autoDisconnect.get()) return;
+        if (event.screen instanceof net.minecraft.client.gui.screen.DeathScreen) {
+            isAutoDisconnecting = true;
+            toggle();
+            mc.player.networkHandler.getConnection().disconnect(
+                net.minecraft.text.Text.literal("[LogoBreaker] Death screen detected. Disconnecting..."));
+        }
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Post event) {
+        if (mc.player == null || mc.world == null) return;
+
+        if (autoDisconnect.get() && (mc.player.getHealth() <= 0 || mc.player.isDead())) {
+            isAutoDisconnecting = true;
+            toggle();
+            mc.player.networkHandler.getConnection().disconnect(
+                net.minecraft.text.Text.literal("[LogoBreaker] Death detected. Disconnecting..."));
+            return;
+        }
+
+        timer++;
+        if (goalChangeCooldown > 0) goalChangeCooldown--;
+        if (baritoneRetryDelay > 0) baritoneRetryDelay--;
+
+        Vec3d currentPos = mc.player.getPos();
+        if (lastPlayerPos != null && lockedBaritoneGoal != null) {
+            if (currentPos.squaredDistanceTo(lastPlayerPos) < STUCK_DIST_SQ)
+                baritoneStuckTimer++;
+            else
+                baritoneStuckTimer = 0;
+
+            if (baritoneStuckTimer >= STUCK_TICKS) {
+                baritoneStuckTimer = 0;
+                baritoneFailCount++;
+                stopBaritone();
+                lockedBaritoneGoal = null;
+                goalChangeCooldown = GOAL_COOLDOWN;
+                baritoneRetryDelay = 20;
+            }
+        }
+        lastPlayerPos = currentPos;
+
+        if (state != State.EATING) {
+            boolean lowHunger = mc.player.getHungerManager().getFoodLevel() <= eatThreshold.get();
+            boolean lowHealth = mc.player.getHealth() <= healthThreshold.get();
+            if (lowHunger || lowHealth) {
+                FindItemResult food = InvUtils.find(this::isFoodValid);
+                if (food.found()) {
+                    preEatState = state;
+                    state = State.EATING;
+                    foodLevelAtStart = mc.player.getHungerManager().getFoodLevel();
+                    stopBaritone();
+                    oldSlotBeforeEating = mc.player.getInventory().selectedSlot;
+                }
+            }
+        }
+
+        if (state == State.EATING) {
+            doEating();
+            return;
+        }
+
+        if (snakeQueue.isEmpty() || snakeIndex >= snakeQueue.size()) {
+            if (timer % 10 == 0) rebuildQueue();
+            return;
+        }
+
+        tickSnake();
+    }
+
+    private void doEating() {
+        if (mc.player.getHungerManager().getFoodLevel() >= 20
+                || (mc.player.getHealth() >= 20
+                    && mc.player.getHungerManager().getFoodLevel() > foodLevelAtStart)) {
+            mc.options.useKey.setPressed(false);
+            mc.interactionManager.stopUsingItem(mc.player);
+            if (oldSlotBeforeEating != -1) InvUtils.swap(oldSlotBeforeEating, false);
+            state = preEatState;
+            foodLevelAtStart = -1;
+            return;
+        }
+
+        FindItemResult food = InvUtils.find(this::isFoodValid);
+        if (!food.found()) {
+            state = preEatState;
+            foodLevelAtStart = -1;
+            return;
+        }
+
+        int slot = ensureInHotbar(food);
+        InvUtils.swap(slot, false);
+        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+        mc.options.useKey.setPressed(true);
+    }
+
+    private boolean isFoodValid(ItemStack stack) {
+        if (!stack.contains(DataComponentTypes.FOOD)) return false;
+        Item item = stack.getItem();
+        boolean contains = foodItems.get().contains(item);
+        return foodWhitelist.get() ? contains : !contains;
     }
 
     private void initLitematicaReflection() {
@@ -183,40 +365,6 @@ public class LogoBreaker extends Module {
         return breakWrongType.get() && schState.getBlock() != worldState.getBlock();
     }
 
-    @EventHandler
-    private void onTick(TickEvent.Post event) {
-        if (mc.player == null || mc.world == null) return;
-
-        timer++;
-        if (goalChangeCooldown > 0) goalChangeCooldown--;
-        if (baritoneRetryDelay > 0) baritoneRetryDelay--;
-
-        Vec3d currentPos = mc.player.getPos();
-        if (lastPlayerPos != null && lockedBaritoneGoal != null) {
-            if (currentPos.squaredDistanceTo(lastPlayerPos) < STUCK_DIST_SQ)
-                baritoneStuckTimer++;
-            else
-                baritoneStuckTimer = 0;
-
-            if (baritoneStuckTimer >= STUCK_TICKS) {
-                baritoneStuckTimer = 0;
-                baritoneFailCount++;
-                stopBaritone();
-                lockedBaritoneGoal = null;
-                goalChangeCooldown = GOAL_COOLDOWN;
-                baritoneRetryDelay = 20;
-            }
-        }
-        lastPlayerPos = currentPos;
-
-        if (snakeQueue.isEmpty() || snakeIndex >= snakeQueue.size()) {
-            if (timer % 10 == 0) rebuildQueue();
-            return;
-        }
-
-        tickSnake();
-    }
-
     private void rebuildQueue() {
         BlockPos pPos = mc.player.getBlockPos();
         int r = scanRange.get();
@@ -240,7 +388,11 @@ public class LogoBreaker extends Module {
             }
         }
 
-        if (allTargets.isEmpty()) { activeChunkX = Integer.MAX_VALUE; return; }
+        if (allTargets.isEmpty()) {
+            activeChunkX = Integer.MAX_VALUE;
+            if (searchFarChunks.get()) moveStraight();
+            return;
+        }
 
         Set<BlockPos> targets = allTargets;
         if (chunkMode.get()) {
@@ -256,6 +408,7 @@ public class LogoBreaker extends Module {
                 activeChunkZ = closest.getZ() >> 4;
                 baritoneFailCount  = 0;
                 lockedBaritoneGoal = null;
+                searchYaw = -1;
             }
 
             Set<BlockPos> chunkTargets = new HashSet<>();
@@ -272,6 +425,60 @@ public class LogoBreaker extends Module {
         snakeIndex = 0;
     }
 
+    private void moveStraight() {
+        if (lockedBaritoneGoal != null) return;
+
+        try {
+            Object schWorld = getSchematicWorld();
+
+            if (searchYaw == -1)
+                searchYaw = (float) (Math.round(mc.player.getYaw() / 90.0) * 90.0);
+
+            if (isImmediateAreaEmpty(schWorld, searchYaw)) {
+                searchYaw += 90;
+                return;
+            }
+
+            double rad = Math.toRadians(searchYaw);
+            double dx  = -Math.sin(rad) * 2.0;
+            double dz  =  Math.cos(rad) * 2.0;
+            BlockPos blindGoal = mc.player.getBlockPos()
+                .add((int) Math.round(dx), 0, (int) Math.round(dz));
+
+            if (hasAnyBlockInColumn(schWorld, blindGoal)) {
+                moveTowards(blindGoal, 0);
+            } else {
+                searchYaw += 90;
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private boolean isImmediateAreaEmpty(Object schWorld, float yaw) throws Exception {
+        double rad = Math.toRadians(yaw);
+        double dx  = -Math.sin(rad);
+        double dz  =  Math.cos(rad);
+        BlockPos pPos = mc.player.getBlockPos();
+
+        for (int i = 1; i <= 2; i++) {
+            BlockPos checkPos = pPos.add((int) (dx * i), 0, (int) (dz * i));
+            if (hasAnyBlockInColumn(schWorld, checkPos)) return false;
+        }
+        return true;
+    }
+
+    private boolean hasAnyBlockInColumn(Object schWorld, BlockPos pos) throws Exception {
+        for (int y = -10; y <= 10; y++) {
+            BlockPos check = pos.up(y);
+            if (litematicaMode.get() && schWorld != null) {
+                BlockState s = getSchematicState(schWorld, check);
+                if (s != null && !s.isAir()) return true;
+            } else {
+                if (isTargetBlock(check, targetBlocks.get())) return true;
+            }
+        }
+        return false;
+    }
+
     private List<BlockPos> buildSnakeOrder(Set<BlockPos> blocks) {
         Map<Integer, List<BlockPos>> byZ = new TreeMap<>();
         for (BlockPos b : blocks)
@@ -286,6 +493,19 @@ public class LogoBreaker extends Module {
             leftToRight = !leftToRight;
         }
         return ordered;
+    }
+
+    private boolean isMobNearby() {
+        if (!pauseOnMob.get()) return false;
+        double px = mc.player.getX();
+        double pz = mc.player.getZ();
+        for (var entity : mc.world.getEntities()) {
+            if (!(entity instanceof MobEntity mob)) continue;
+            double dx = mob.getX() - px;
+            double dz = mob.getZ() - pz;
+            if (Math.sqrt(dx * dx + dz * dz) <= 5.0) return true;
+        }
+        return false;
     }
 
     private void tickSnake() {
@@ -360,6 +580,8 @@ public class LogoBreaker extends Module {
             goalChangeCooldown = 0;
 
             tryBreakPathObstacle(target, schWorld);
+
+            if (isMobNearby()) return;
 
             FindItemResult pick = InvUtils.find(s -> s.getItem() instanceof PickaxeItem);
             if (!pick.found()) { error("No pickaxe found!"); toggle(); return; }
