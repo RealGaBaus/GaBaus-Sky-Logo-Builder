@@ -31,9 +31,7 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 
 public class LogoBuilder extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -42,15 +40,21 @@ public class LogoBuilder extends Module {
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder().name("place-range").defaultValue(4.5).sliderMax(6).build());
     private final Setting<Integer> scanRange = sgGeneral.add(new IntSetting.Builder().name("scan-radius").defaultValue(32).min(5).sliderMax(512).build());
+    private final Setting<List<Item>> trackedMaterials = sgGeneral.add(new ItemListSetting.Builder()
+        .name("tracked-materials")
+        .description("Blocks the builder will place.")
+        .defaultValue(List.of(Items.OBSIDIAN, Items.CRYING_OBSIDIAN, Items.NETHERITE_BLOCK))
+        .build()
+    );
     private final Setting<Integer> placeDelay = sgGeneral.add(new IntSetting.Builder().name("place-delay").defaultValue(0).sliderMax(20).build());
     private final Setting<Boolean> useBaritone = sgGeneral.add(new BoolSetting.Builder().name("use-baritone").defaultValue(true).build());
-    private final Setting<Boolean> airPlace = sgGeneral.add(new BoolSetting.Builder().name("air-place").description("If disabled, the bot will move to positions but won't place schematic blocks.").defaultValue(true).build());
+    private final Setting<Boolean> airPlace = sgGeneral.add(new BoolSetting.Builder().name("air-place").description("If disabled, moves to positions but won't place blocks.").defaultValue(true).build());
     private final Setting<Boolean> chunkMode = sgGeneral.add(new BoolSetting.Builder().name("chunk-mode").description("Focus on finishing one chunk at a time.").defaultValue(true).build());
-    private final Setting<Integer> eatThreshold = sgGeneral.add(new IntSetting.Builder().name("eat-threshold").description("Hunger level to start eating (4 muslitos = 8).").defaultValue(8).min(1).max(20).sliderMax(20).build());
-    private final Setting<Double> healthThreshold = sgGeneral.add(new DoubleSetting.Builder().name("health-threshold").description("Minimum life to eat (20 = full life).").defaultValue(15.0).min(1).max(20).sliderMax(20).build());
+    private final Setting<Integer> eatThreshold = sgGeneral.add(new IntSetting.Builder().name("eat-threshold").description("Hunger level to start eating.").defaultValue(8).min(1).max(20).sliderMax(20).build());
+    private final Setting<Double> healthThreshold = sgGeneral.add(new DoubleSetting.Builder().name("health-threshold").description("Minimum health to trigger eating.").defaultValue(15.0).min(1).max(20).sliderMax(20).build());
     private final Setting<List<Item>> foodItems = sgGeneral.add(new ItemListSetting.Builder().name("food-items").description("Items to eat or avoid.").build());
-    private final Setting<Boolean> foodWhitelist = sgGeneral.add(new BoolSetting.Builder().name("food-whitelist").description("If enabled, only items in the list will be eaten. Otherwise, it avoids them.").defaultValue(true).build());
-    private final Setting<Boolean> searchFarChunks = sgGeneral.add(new BoolSetting.Builder().name("search-far-chunks").description("If no blocks are found, move straight with Baritone to find new chunks.").defaultValue(false).build());
+    private final Setting<Boolean> foodWhitelist = sgGeneral.add(new BoolSetting.Builder().name("food-whitelist").description("If enabled, only listed items are eaten. Otherwise, they are avoided.").defaultValue(true).build());
+    private final Setting<Boolean> searchFarChunks = sgGeneral.add(new BoolSetting.Builder().name("search-far-chunks").description("If no blocks are found, move forward with Baritone to find new chunks.").defaultValue(false).build());
 
     private final Setting<Integer> maxStacks = sgLogistics.add(new IntSetting.Builder().name("reload-limit-stacks").defaultValue(12).sliderMax(27).build());
     private final Setting<List<Item>> keepItems = sgLogistics.add(new ItemListSetting.Builder()
@@ -71,7 +75,7 @@ public class LogoBuilder extends Module {
 
     private final Setting<Boolean> autoDisconnect = sgSafety.add(new BoolSetting.Builder()
         .name("auto-disconnect")
-        .description("It automatically disconnects if you pop a totem or die.")
+        .description("Disconnects automatically on totem pop or death.")
         .defaultValue(false)
         .build()
     );
@@ -81,12 +85,13 @@ public class LogoBuilder extends Module {
     private State preEatingState = State.BUILDING;
 
     private final List<BlockPos> toPlace = new ArrayList<>();
+    private final Map<Item, BlockPos> stations = new HashMap<>();
     private Method getSchematicWorldMethod, getBlockStateMethod;
     private boolean reflectionSuccessNotified = false;
-    private int timer = 0, delayTimer = 0, waitTicks = 0, baritoneStuckTimer = 0, oldSlotBeforeEating = -1, foodLevelAtStart = -1;
+    private int timer = 0, delayTimer = 0, waitTicks = 0, baritoneStuckTimer = 0, oldSlotBeforeEating = -1, foodLevelAtStart = -1, reloadWait = 0;
     private int activeChunkX = Integer.MAX_VALUE, activeChunkZ = Integer.MAX_VALUE;
     private float searchYaw = -1;
-    private BlockPos targetPos, obsidianStation, cryingStation, activeStation, lastBaritoneGoal;
+    private BlockPos targetPos, activeStation, lastBaritoneGoal;
     public Item neededMaterial;
     private boolean isAutoDisconnecting = false;
 
@@ -97,7 +102,7 @@ public class LogoBuilder extends Module {
     @Override
     public void onActivate() {
         info("LogoBuilder: Activating...");
-        timer = 0; delayTimer = 0; waitTicks = 0; baritoneStuckTimer = 0;
+        timer = 0; delayTimer = 0; waitTicks = 0; baritoneStuckTimer = 0; reloadWait = 0;
         state = State.BUILDING;
         targetPos = null;
         lastBaritoneGoal = null;
@@ -105,8 +110,7 @@ public class LogoBuilder extends Module {
         activeChunkX = Integer.MAX_VALUE;
         activeChunkZ = Integer.MAX_VALUE;
         searchYaw = -1;
-        obsidianStation = null;
-        cryingStation = null;
+        stations.clear();
         getSchematicWorldMethod = null;
         getBlockStateMethod = null;
         reflectionSuccessNotified = false;
@@ -117,10 +121,7 @@ public class LogoBuilder extends Module {
     public void onDeactivate() {
         stopBaritone();
         mc.options.forwardKey.setPressed(false);
-        if (!isAutoDisconnecting) {
-            obsidianStation = null;
-            cryingStation = null;
-        }
+        if (isAutoDisconnecting) stations.clear();
         getSchematicWorldMethod = null;
         getBlockStateMethod = null;
         reflectionSuccessNotified = false;
@@ -139,7 +140,6 @@ public class LogoBuilder extends Module {
                     }
                 }
             }
-
             if (getSchematicWorldMethod != null) {
                 getSchematicWorldMethod.setAccessible(true);
             } else {
@@ -158,11 +158,11 @@ public class LogoBuilder extends Module {
                 if (packet.getStatus() == 35) {
                     isAutoDisconnecting = true;
                     toggle();
-                    mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Totem pop detected during construction. Disconnecting..."));
+                    mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Totem pop detected. Disconnecting..."));
                 } else if (packet.getStatus() == 3) {
                     isAutoDisconnecting = true;
                     toggle();
-                    mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death detected (packet) during construction. Disconnecting..."));
+                    mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death detected. Disconnecting..."));
                 }
             }
         }
@@ -174,58 +174,49 @@ public class LogoBuilder extends Module {
         if (event.screen instanceof net.minecraft.client.gui.screen.DeathScreen) {
             isAutoDisconnecting = true;
             toggle();
-            mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death screen detected during construction. Disconnecting..."));
+            mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death screen detected. Disconnecting..."));
         }
     }
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
-        
-        if (mc.currentScreen instanceof GameMenuScreen) {
-            mc.setScreen(null);
-        }
+
+        if (mc.currentScreen instanceof GameMenuScreen) mc.setScreen(null);
 
         if (autoDisconnect.get() && state == State.BUILDING && (mc.player.getHealth() <= 0 || mc.player.isDead())) {
             isAutoDisconnecting = true;
             toggle();
-            mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death detected during construction. Disconnecting..."));
+            mc.player.networkHandler.getConnection().disconnect(net.minecraft.text.Text.literal("[LogoBuilder] Death detected. Disconnecting..."));
             return;
         }
 
         if (waitTicks > 0) { waitTicks--; return; }
         if (delayTimer > 0) delayTimer--;
 
+        boolean lowHunger = mc.player.getHungerManager().getFoodLevel() <= eatThreshold.get();
+        boolean lowHealth = mc.player.getHealth() <= healthThreshold.get();
 
-boolean lowHunger = mc.player.getHungerManager().getFoodLevel() <= eatThreshold.get();
-boolean lowHealth = mc.player.getHealth() <= healthThreshold.get();
-
-
-if (state != State.EATING && (lowHunger || lowHealth)) {
-    FindItemResult food = InvUtils.find(this::isFoodValid);
-    if (food.found()) {
-        preEatingState = state;
-        state = State.EATING;
-        foodLevelAtStart = mc.player.getHungerManager().getFoodLevel();
-        stopBaritone();
-        oldSlotBeforeEating = mc.player.getInventory().selectedSlot;
-    }
-}
+        if (state != State.EATING && (lowHunger || lowHealth)) {
+            FindItemResult food = InvUtils.find(this::isFoodValid);
+            if (food.found()) {
+                preEatingState = state;
+                state = State.EATING;
+                foodLevelAtStart = mc.player.getHungerManager().getFoodLevel();
+                stopBaritone();
+                oldSlotBeforeEating = mc.player.getInventory().selectedSlot;
+            }
+        }
 
         if (lastBaritoneGoal != null && mc.player.getVelocity().horizontalLengthSquared() < 0.0001) {
             baritoneStuckTimer++;
-            if (baritoneStuckTimer > 40) { 
-                lastBaritoneGoal = null; 
-                baritoneStuckTimer = 0; 
-            }
+            if (baritoneStuckTimer > 40) { lastBaritoneGoal = null; baritoneStuckTimer = 0; }
         } else {
             baritoneStuckTimer = 0;
         }
 
         if (lastBaritoneGoal != null && targetPos == null && state == State.BUILDING && searchFarChunks.get()) {
-            if (mc.player.getPos().distanceTo(Vec3d.ofCenter(lastBaritoneGoal)) < 1.2) {
-                lastBaritoneGoal = null;
-            }
+            if (mc.player.getPos().distanceTo(Vec3d.ofCenter(lastBaritoneGoal)) < 1.2) lastBaritoneGoal = null;
             baritoneStuckTimer++;
             if (baritoneStuckTimer > 40) {
                 stopBaritone();
@@ -237,13 +228,13 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             baritoneStuckTimer = 0;
         }
 
-    if (state == State.WAITING_FOR_RESTOCK) {
-        Module restock = Modules.get().get(AutoRestock.class);
-        if (restock != null && !restock.isActive()) {
-            state = State.BUILDING;
-            info("AutoRestock finished. Returning to construction.");
-        }
-         return;
+        if (state == State.WAITING_FOR_RESTOCK) {
+            Module restock = Modules.get().get(AutoRestock.class);
+            if (restock != null && !restock.isActive()) {
+                state = State.BUILDING;
+                info("AutoRestock finished. Returning to construction.");
+            }
+            return;
         }
 
         if (state == State.BUILDING) {
@@ -268,38 +259,32 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             if (oldSlotBeforeEating != -1) InvUtils.swap(oldSlotBeforeEating, false);
             state = preEatingState;
             foodLevelAtStart = -1;
-            waitTicks = 5; 
+            waitTicks = 5;
             return;
         }
 
         FindItemResult food = InvUtils.find(this::isFoodValid);
-        if (!food.found()) {
-            state = preEatingState;
-            foodLevelAtStart = -1;
-            return;
-        }
+        if (!food.found()) { state = preEatingState; foodLevelAtStart = -1; return; }
 
         int slot = ensureInHotbar(food);
         InvUtils.swap(slot, false);
-        
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
         mc.options.useKey.setPressed(true);
     }
 
     private boolean isFoodValid(ItemStack stack) {
         if (!stack.contains(DataComponentTypes.FOOD)) return false;
-        Item item = stack.getItem();
-        boolean contains = foodItems.get().contains(item);
+        boolean contains = foodItems.get().contains(stack.getItem());
         return foodWhitelist.get() ? contains : !contains;
     }
 
     private void doScan() {
         try {
-            if (getSchematicWorldMethod == null) { 
-                initReflection(); 
-                if (getSchematicWorldMethod == null) return; 
+            if (getSchematicWorldMethod == null) {
+                initReflection();
+                if (getSchematicWorldMethod == null) return;
             }
-            
+
             Object worldSchematic = getSchematicWorldMethod.invoke(null);
             if (worldSchematic == null) {
                 if (timer % 100 == 0) warning("Litematica is connected, but no schematic world is loaded.");
@@ -315,7 +300,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                     }
                 }
             }
-            
+
             if (getBlockStateMethod == null) {
                 if (timer % 100 == 0) error("Could not find getBlockState method in Litematica's WorldSchematic.");
                 return;
@@ -329,18 +314,18 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             toPlace.clear();
             BlockPos pPos = mc.player.getBlockPos();
             int r = scanRange.get();
-            
+
             for (int x = -r; x <= r; x++) {
                 for (int y = -1; y <= 1; y++) {
                     for (int z = -r; z <= r; z++) {
                         BlockPos pos = pPos.add(x, y, z);
                         BlockState req = (BlockState) getBlockStateMethod.invoke(worldSchematic, pos);
                         if (req != null && !req.isAir()) {
+                            Item reqItem = req.getBlock().asItem();
+                            if (!trackedMaterials.get().contains(reqItem)) continue;
                             BlockState current = mc.world.getBlockState(pos);
-                            if (current.getBlock() != req.getBlock()) {
-                                if (current.isAir() || current.isReplaceable()) {
-                                    toPlace.add(pos);
-                                }
+                            if (current.getBlock() != req.getBlock() && (current.isAir() || current.isReplaceable())) {
+                                toPlace.add(pos);
                             }
                         }
                     }
@@ -385,24 +370,19 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                         boolean bBelow = b.getY() < mc.player.getY();
                         if (aBelow && !bBelow) return -1;
                         if (!aBelow && bBelow) return 1;
-                        double distSqA = mc.player.squaredDistanceTo(a.getX() + 0.5, a.getY() + 0.5, a.getZ() + 0.5);
-                        double distSqB = mc.player.squaredDistanceTo(b.getX() + 0.5, b.getY() + 0.5, b.getZ() + 0.5);
-                        return Double.compare(distSqA, distSqB);
+                        return Double.compare(
+                            mc.player.squaredDistanceTo(a.getX() + 0.5, a.getY() + 0.5, a.getZ() + 0.5),
+                            mc.player.squaredDistanceTo(b.getX() + 0.5, b.getY() + 0.5, b.getZ() + 0.5)
+                        );
                     });
                     targetPos = toPlace.get(0);
                 } else {
                     targetPos = null;
-                    if (searchFarChunks.get()) {
-                        activeChunkX = Integer.MAX_VALUE;
-                        moveStraight();
-                    }
+                    if (searchFarChunks.get()) { activeChunkX = Integer.MAX_VALUE; moveStraight(); }
                 }
             } else {
                 targetPos = null;
-                if (searchFarChunks.get()) {
-                    activeChunkX = Integer.MAX_VALUE;
-                    moveStraight();
-                }
+                if (searchFarChunks.get()) { activeChunkX = Integer.MAX_VALUE; moveStraight(); }
             }
         } catch (Exception e) {
             if (timer % 100 == 0) error("Scan error: " + e.toString());
@@ -411,28 +391,17 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
 
     private void moveStraight() {
         if (lastBaritoneGoal != null) return;
-
         try {
             Object worldSchematic = getSchematicWorldMethod.invoke(null);
             if (worldSchematic == null) return;
-
             if (searchYaw == -1) searchYaw = (float) (Math.round(mc.player.getYaw() / 90.0) * 90.0);
-
-            if (isImmediateAreaEmpty(worldSchematic, searchYaw)) {
-                searchYaw += 90;
-                return;
-            }
-
+            if (isImmediateAreaEmpty(worldSchematic, searchYaw)) { searchYaw += 90; return; }
             double rad = Math.toRadians(searchYaw);
             double dx = -Math.sin(rad) * 2.0;
             double dz = Math.cos(rad) * 2.0;
             BlockPos blindGoal = mc.player.getBlockPos().add((int) Math.round(dx), 0, (int) Math.round(dz));
-            
-            if (hasAnyBlockInColumn(worldSchematic, blindGoal)) {
-                moveTowards(blindGoal, 0);
-            } else {
-                searchYaw += 90;
-            }
+            if (hasAnyBlockInColumn(worldSchematic, blindGoal)) moveTowards(blindGoal, 0);
+            else searchYaw += 90;
         } catch (Exception ignored) {}
     }
 
@@ -441,34 +410,18 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
         double dx = -Math.sin(rad);
         double dz = Math.cos(rad);
         BlockPos pPos = mc.player.getBlockPos();
-
         for (int i = 1; i <= 2; i++) {
-            BlockPos checkPos = pPos.add((int) (dx * i), 0, (int) (dz * i));
-            if (hasAnyBlockInColumn(worldSchematic, checkPos)) return false;
+            if (hasAnyBlockInColumn(worldSchematic, pPos.add((int) (dx * i), 0, (int) (dz * i)))) return false;
         }
         return true;
     }
 
     private boolean hasAnyBlockInColumn(Object worldSchematic, BlockPos pos) throws Exception {
         for (int y = -10; y <= 10; y++) {
-            BlockState state = (BlockState) getBlockStateMethod.invoke(worldSchematic, pos.up(y));
-            if (state != null && !state.isAir()) return true;
+            BlockState s = (BlockState) getBlockStateMethod.invoke(worldSchematic, pos.up(y));
+            if (s != null && !s.isAir()) return true;
         }
         return false;
-    }
-
-    private int getDistanceToNearestBlock(Object worldSchematic, float yaw) throws Exception {
-        double rad = Math.toRadians(yaw);
-        double dx = -Math.sin(rad);
-        double dz = Math.cos(rad);
-        BlockPos pPos = mc.player.getBlockPos();
-
-        for (int i = 1; i <= 64; i++) {
-            BlockPos checkPos = pPos.add((int) (dx * i), 0, (int) (dz * i));
-            if (hasAnyBlockInColumn(worldSchematic, checkPos)) return i;
-            if (getBlockStateMethod.invoke(worldSchematic, checkPos) == null) return -1;
-        }
-        return -1;
     }
 
     private void tickBuildingLogic() {
@@ -479,15 +432,17 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
 
             BlockState required = (BlockState) getBlockStateMethod.invoke(worldSchematic, targetPos);
             if (required == null || required.isAir()) { targetPos = null; return; }
-            
+
             Item item = required.getBlock().asItem();
+            if (!trackedMaterials.get().contains(item)) { targetPos = null; return; }
+
             if (countItem(item) == 0) {
                 info("Out of " + item.getName().getString());
                 neededMaterial = item;
-                activeStation = (item == Items.OBSIDIAN) ? obsidianStation : (item == Items.CRYING_OBSIDIAN ? cryingStation : null);
+                BlockPos knownStation = stations.get(item);
+                activeStation = (knownStation != null && mc.world.getBlockState(knownStation).getBlock() instanceof ShulkerBoxBlock) ? knownStation : null;
                 stopBaritone();
-                state = (activeStation == null || !(mc.world.getBlockState(activeStation).getBlock() instanceof ShulkerBoxBlock)) 
-                        ? State.PLACING_STATION : State.TRAVELING;
+                state = (activeStation == null) ? State.PLACING_STATION : State.TRAVELING;
                 return;
             }
 
@@ -496,9 +451,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                 stopBaritone();
                 mc.options.forwardKey.setPressed(false);
                 if (airPlace.get() && delayTimer <= 0) {
-                    if (placeBlock(targetPos, item)) {
-                        delayTimer = placeDelay.get();
-                    }
+                    if (placeBlock(targetPos, item)) delayTimer = placeDelay.get();
                 }
             } else {
                 moveTowards(targetPos, (int) Math.floor(range.get() - 1.2));
@@ -515,27 +468,31 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                 if (dist <= 4.0) { stopBaritone(); state = State.OPENING; }
                 else moveTowards(activeStation, 2);
             }
-
             case OPENING -> {
+                reloadWait = 0;
                 mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, new BlockHitResult(Vec3d.ofCenter(activeStation), Direction.UP, activeStation, false));
-                state = State.RELOADING; waitTicks = 15;
+                state = State.RELOADING;
+                waitTicks = 15;
             }
             case RELOADING -> {
                 if (mc.currentScreen instanceof ShulkerBoxScreen) {
+                    if (reloadWait < 3) { reloadWait++; return; }
+                    reloadWait = 0;
+
+                    for (int i = 27; i < 63; i++) {
+                        ItemStack stack = mc.player.currentScreenHandler.getSlot(i).getStack();
+                        if (stack.isEmpty()) continue;
+                        if (!keepItems.get().contains(stack.getItem()) && stack.getItem() != neededMaterial) {
+                            mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
+                        }
+                    }
+
                     int taken = 0;
                     for (int i = 0; i < 27 && taken < maxStacks.get(); i++) {
                         ItemStack stack = mc.player.currentScreenHandler.getSlot(i).getStack();
                         if (stack.getItem() == neededMaterial) {
                             mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
                             taken++;
-                        }
-                    }
-
-                    for (int i = 27; i < 63; i++) {
-                        ItemStack stack = mc.player.currentScreenHandler.getSlot(i).getStack();
-                        if (stack.isEmpty()) continue;
-                        if (!keepItems.get().contains(stack.getItem())) {
-                            mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, i, 0, SlotActionType.QUICK_MOVE, mc.player);
                         }
                     }
 
@@ -548,14 +505,13 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                     }
 
                     mc.player.closeHandledScreen();
-                    
+
                     if (!remaining) {
-                        info("Shulker at " + activeStation.toShortString() + " is now empty of " + neededMaterial.getName().getString() + ". Forgetting it.");
-                        if (neededMaterial == Items.OBSIDIAN) obsidianStation = null;
-                        else if (neededMaterial == Items.CRYING_OBSIDIAN) cryingStation = null;
+                        info("Shulker at " + activeStation.toShortString() + " is empty of " + neededMaterial.getName().getString() + ". Forgetting it.");
+                        stations.remove(neededMaterial);
                         activeStation = null;
                     }
-                    
+
                     state = (countItem(neededMaterial) == 0) ? State.PLACING_STATION : State.BUILDING;
                 }
             }
@@ -566,9 +522,10 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                     if (shulker.found()) {
                         int slot = ensureInHotbar(shulker);
                         if (BlockUtils.place(pos, Hand.MAIN_HAND, slot, true, 0, true, true, false)) {
-                            if (neededMaterial == Items.OBSIDIAN) obsidianStation = pos; 
-                            else if (neededMaterial == Items.CRYING_OBSIDIAN) cryingStation = pos;
-                            activeStation = pos; state = State.OPENING; waitTicks = 10;
+                            stations.put(neededMaterial, pos);
+                            activeStation = pos;
+                            state = State.OPENING;
+                            waitTicks = 10;
                         }
                     } else {
                         Module restock = Modules.get().get(AutoRestock.class);
@@ -581,7 +538,6 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
             }
             default -> {}
         }
-        
     }
 
     private void moveTowards(BlockPos pos, int dist) {
@@ -592,10 +548,8 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
                 Object provider = baritoneAPI.getMethod("getProvider").invoke(null);
                 Object primary = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
                 Object customGoalProcess = primary.getClass().getMethod("getCustomGoalProcess").invoke(primary);
-                
                 Class<?> goalNear = Class.forName("baritone.api.pathing.goals.GoalNear");
                 Object goal = goalNear.getConstructor(BlockPos.class, int.class).newInstance(pos, dist);
-                
                 Method setGoal = customGoalProcess.getClass().getMethod("setGoalAndPath", Class.forName("baritone.api.pathing.goals.Goal"));
                 setGoal.invoke(customGoalProcess, goal);
                 lastBaritoneGoal = pos;
@@ -637,9 +591,9 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
     }
 
     private boolean isValidPlacement(BlockPos pos) {
-        return mc.world.getBlockState(pos).isReplaceable() && 
-               !mc.world.getBlockState(pos.up()).isReplaceable() && 
-               mc.player.getPos().distanceTo(Vec3d.ofCenter(pos)) <= range.get();
+        return mc.world.getBlockState(pos).isReplaceable()
+            && !mc.world.getBlockState(pos.up()).isReplaceable()
+            && mc.player.getPos().distanceTo(Vec3d.ofCenter(pos)) <= range.get();
     }
 
     private int ensureInHotbar(FindItemResult result) {
@@ -670,7 +624,7 @@ if (state != State.EATING && (lowHunger || lowHealth)) {
 
     private FindItemResult findShulkerWith(Item material) {
         return InvUtils.find(stack -> {
-            if (!(stack.getItem() instanceof BlockItem && ((BlockItem) stack.getItem()).getBlock() instanceof ShulkerBoxBlock)) return false;
+            if (!(stack.getItem() instanceof BlockItem bi && bi.getBlock() instanceof ShulkerBoxBlock)) return false;
             ContainerComponent container = stack.get(DataComponentTypes.CONTAINER);
             if (container == null) return false;
             for (ItemStack inner : container.iterateNonEmpty()) {
