@@ -20,7 +20,7 @@ GaBaus Sky-logo Builder is an addon for the Meteor Client that allows you to aut
 
 </div>
 
-# GaBaus Sky-logo Builder (For minecraft 1.21.1)
+# GaBaus Sky-logo Builder (For minecraft 1.21.1 - 1.21.4 - 1.21.11)
 
 #### If you have any questions, open an issue or DM me on Discord: `bautti_.`
 
