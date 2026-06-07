@@ -195,7 +195,7 @@ public class AutoRestock extends Module {
                 }
                 mc.player.refreshPositionAndAngles(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch);
                 if (mc.getNetworkHandler() != null)
-                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch, mc.player.isOnGround()));
+                    mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                 pearlCount = InvUtils.find(Items.ENDER_PEARL).count();
                 state = State.THROW;
                 timer = 10;
@@ -222,7 +222,7 @@ public class AutoRestock extends Module {
                     mc.options.rightKey.setPressed(false);
                     mc.player.refreshPositionAndAngles(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch);
                     if (mc.getNetworkHandler() != null)
-                        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch, mc.player.isOnGround()));
+                        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(centerX, mc.player.getY(), centerZ, targetYaw, targetPitch, mc.player.isOnGround(), mc.player.horizontalCollision));
                     InvUtils.swap(pearl.slot(), true);
                     mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                     InvUtils.swapBack();
@@ -239,7 +239,7 @@ public class AutoRestock extends Module {
                     state = State.WAIT_TP;
                 }
             }
-            case GOTO_OBS -> { if (walkTo(Vec3d.ofCenter(obsidianChestPos.get()))) { state = State.OPEN_OBS; timer = 0; } }
+            case GOTO_OBS -> { if (walkTo(Vec3d.ofCenter(obsidianChestPos.get()), 2)) { state = State.OPEN_OBS; timer = 0; } }
             case OPEN_OBS -> { lookAndOpen(obsidianChestPos.get(), () -> { state = State.LOOT_OBS; timer = 20; }); timer = 100; }
             case LOOT_OBS -> {
                 if (mc.currentScreen instanceof GenericContainerScreen) {
@@ -251,7 +251,7 @@ public class AutoRestock extends Module {
                     state = State.OPEN_OBS;
                 }
             }
-            case GOTO_CRY -> { if (walkTo(Vec3d.ofCenter(cryingChestPos.get()))) { state = State.OPEN_CRY; timer = 0; } }
+            case GOTO_CRY -> { if (walkTo(Vec3d.ofCenter(cryingChestPos.get()), 2)) { state = State.OPEN_CRY; timer = 0; } }
             case OPEN_CRY -> { lookAndOpen(cryingChestPos.get(), () -> { state = State.LOOT_CRY; timer = 20; }); timer = 100; }
             case LOOT_CRY -> {
                 if (mc.currentScreen instanceof GenericContainerScreen) {
@@ -273,7 +273,7 @@ public class AutoRestock extends Module {
             case KIT_MOVE_TO_SAFE -> {
                 BlockPos safeCenter = findSafeChunkCenter();
                 if (safeCenter != null) {
-                    if (walkTo(Vec3d.ofCenter(safeCenter))) {
+                    if (walkTo(Vec3d.ofCenter(safeCenter), 2)) {
                         info("Arrived at safe position. Waiting...");
                         state = State.KIT_WAIT;
                         timer = 100;
@@ -323,7 +323,7 @@ public class AutoRestock extends Module {
             }
             case KIT_PICKUP -> {
                 if (targetItem == null || !targetItem.isAlive()) { state = State.KIT_CHECK; return; }
-                if (walkTo(targetItem.getPos())) {
+                if (walkTo(targetItem.getPos(), 0)) {
                     if (timer <= 0) {
                         shulkerPickedUp = true;
                         timer = 10;
@@ -396,9 +396,9 @@ public class AutoRestock extends Module {
         return count;
     }
 
-    private boolean walkTo(Vec3d target) {
+    private boolean walkTo(Vec3d target, int radius) {
         BlockPos goalPos = BlockPos.ofFloored(target);
-        double dist = Math.sqrt(mc.player.squaredDistanceTo(Vec3d.ofCenter(goalPos)));
+        double dist = Math.sqrt(mc.player.squaredDistanceTo(target.x, mc.player.getY(), target.z));
         if (useBaritone.get()) {
             if (!goalPos.equals(lastBaritoneGoal)) {
                 stopBaritone();
@@ -407,20 +407,21 @@ public class AutoRestock extends Module {
                     Object provider = baritoneAPI.getMethod("getProvider").invoke(null);
                     Object primary = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
                     Object customGoalProcess = primary.getClass().getMethod("getCustomGoalProcess").invoke(primary);
-                    Class<?> goalBlock = Class.forName("baritone.api.pathing.goals.GoalBlock");
-                    Object goal = goalBlock.getConstructor(BlockPos.class).newInstance(goalPos);
+                    Class<?> goalNear = Class.forName("baritone.api.pathing.goals.GoalNear");
+                    Object goal = goalNear.getConstructor(BlockPos.class, int.class).newInstance(goalPos, radius);
                     customGoalProcess.getClass().getMethod("setGoalAndPath", Class.forName("baritone.api.pathing.goals.Goal")).invoke(customGoalProcess, goal);
                     lastBaritoneGoal = goalPos;
-                } catch (Exception e) { return manualWalk(Vec3d.ofCenter(goalPos)); }
+                } catch (Exception e) { return manualWalk(target, radius); }
             }
-            if (dist < 1.3) { stop(); return true; }
+            if (dist < (radius + 0.5)) { stop(); return true; }
             return false;
         }
-        return manualWalk(Vec3d.ofCenter(goalPos));
+        return manualWalk(target, radius);
     }
 
-    private boolean manualWalk(Vec3d target) {
-        if (Math.sqrt(mc.player.squaredDistanceTo(target)) < 0.2) { stop(); return true; }
+    private boolean manualWalk(Vec3d target, int radius) {
+        double dist = Math.sqrt(mc.player.squaredDistanceTo(target.x, mc.player.getY(), target.z));
+        if (dist < (radius + 0.2)) { stop(); return true; }
         double dx = target.x - mc.player.getX(), dz = target.z - mc.player.getZ();
         float yaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90;
         mc.player.setYaw(yaw);
@@ -442,8 +443,8 @@ public class AutoRestock extends Module {
             Class<?> baritoneAPI = Class.forName("baritone.api.BaritoneAPI");
             Object provider = baritoneAPI.getMethod("getProvider").invoke(null);
             Object primary = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
-            Object pathingBehavior = primary.getClass().getMethod("getPathingBehavior").invoke(primary);
-            pathingBehavior.getClass().getMethod("cancelEverything").invoke(pathingBehavior);
+            Object customGoalProcess = primary.getClass().getMethod("getCustomGoalProcess").invoke(primary);
+            customGoalProcess.getClass().getMethod("stop").invoke(customGoalProcess);
         } catch (Exception ignored) {}
     }
 
